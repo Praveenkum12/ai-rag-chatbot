@@ -1,0 +1,7 @@
+# Python dependencies
+fastapi
+uvicorn
+chromadb
+langchain
+openai
+python-dotenv
