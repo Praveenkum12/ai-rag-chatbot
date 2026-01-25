@@ -1,10 +1,9 @@
 from typing import List, Dict
-from .chroma_store import ChromaVectorStore
-
+from .vector_store import VectorStore
 
 def store_chunks(
     chunks: List[Dict],
-    vector_store: ChromaVectorStore
+    vector_store: VectorStore
 ) -> None:
     texts = [c["text"] for c in chunks]
     metadatas = [c["metadata"] for c in chunks]
