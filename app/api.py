@@ -1,43 +1,46 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from pathlib import Path
 import uuid
 
 from app.rag.ingest import load_and_split_pdf
-from app.rag.vectorstore import get_vectorstore
-from app.rag.qa import get_qa_chain
+from pydantic import BaseModel
 
 router = APIRouter()
 
 DATA_DIR = Path("data/documents")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Initialize vector DB once
-vectordb = get_vectorstore()
-qa_chain = get_qa_chain(vectordb)
+class ChatRequest(BaseModel):
+    question: str
+
 
 @router.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(request: Request, file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files supported")
 
-    doc_id = str(uuid.uuid4())
-    file_path = DATA_DIR / f"{doc_id}.pdf"
+    try:
+        doc_id = str(uuid.uuid4())
+        file_path = DATA_DIR / f"{doc_id}.pdf"
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
 
-    chunks = load_and_split_pdf(str(file_path))
-    vectordb.add_documents(chunks)  # ✅ automatically persisted
+        chunks = load_and_split_pdf(str(file_path))
+        request.app.state.vectordb.add_documents(chunks)
 
-    return {
-        "document_id": doc_id,
-        "chunks_added": len(chunks)
-    }
+        return {
+            "document_id": doc_id,
+            "chunks_added": len(chunks),
+            "filename": file.filename
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
 
 
 @router.post("/chat")
-def chat(question: str):
-    answer = qa_chain.invoke(question)
+def chat(request: Request, chat_request: ChatRequest):
+    answer = request.app.state.qa_chain.invoke(chat_request.question)
     return {
         "answer": answer
     }
