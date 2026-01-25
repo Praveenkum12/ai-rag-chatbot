@@ -6,3 +6,4 @@ langchain
 tiktoken
 python-multipart
 pypdf
+python-dotenv
