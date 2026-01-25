@@ -2,10 +2,17 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from pathlib import Path
 import shutil
 import uuid
+from pydantic import BaseModel
+from app.rag.chroma_store import ChromaVectorStore
+from app.rag.qa import answer_question
 
 from app.rag.loader import load_pdf, clean_text
 
 router = APIRouter()
+vector_store = ChromaVectorStore()
+
+class QuestionRequest(BaseModel):
+    question: str
 
 DATA_DIR = Path("data/documents")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,3 +38,7 @@ async def upload_document(file: UploadFile = File(...)):
         "preview": cleaned_text[:500]
     }
 
+@router.post("/chat")
+def chat(req: QuestionRequest):
+    result = answer_question(req.question, vector_store)
+    return result
