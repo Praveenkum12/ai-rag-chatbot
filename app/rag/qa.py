@@ -1,31 +1,39 @@
-from openai import OpenAI
-from .prompt import build_prompt
-from .retriever import retrieve_context
-from .vector_store import VectorStore
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
-def answer_question(
-    question: str,
-    vector_store: VectorStore,
-    k: int = 5
-) -> dict:
-    from openai import OpenAI
-    client = OpenAI()
 
-    contexts = retrieve_context(question, vector_store, k=k)
-    prompt = build_prompt(question, contexts)
+def get_qa_chain(vectordb):
+    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
 
-    response = client.chat.completions.create(
-        model="gpt-4.1-nano",
-        messages=[
-            {"role": "system", "content": "You answer questions using provided context only."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
+    llm = ChatOpenAI(
+        model="gpt-4.1-mini",
+        temperature=0.2
     )
 
-    return {
-        "answer": response.choices[0].message.content,
-        "sources": [
-            c["metadata"] for c in contexts
-        ]
-    }
+    prompt = ChatPromptTemplate.from_template(
+    """
+    You are a helpful assistant.
+    Answer the question using ONLY the context below.
+    If the answer is not in the context, say "I don't know."
+
+    Context:
+    {context}
+
+    Question:
+    {question}
+    """
+        )
+
+    chain = (
+        {
+            "context": retriever,
+            "question": RunnablePassthrough()
+        }
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    return chain

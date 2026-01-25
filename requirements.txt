@@ -1,9 +1,11 @@
-fastapi
-uvicorn
-openai
-chromadb
 langchain
-tiktoken
-python-multipart
+langchain-openai
+langchain-community
+langchain-chroma
+chromadb
 pypdf
 python-dotenv
+fastapi
+uvicorn
+langchain-text-splitters
+python-multipart
