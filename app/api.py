@@ -15,7 +15,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 vectordb = get_vectorstore()
 qa_chain = get_qa_chain(vectordb)
 
-
 @router.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
@@ -27,10 +26,8 @@ async def upload_document(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # LangChain ingestion
     chunks = load_and_split_pdf(str(file_path))
-    vectordb.add_documents(chunks)
-    vectordb.persist()
+    vectordb.add_documents(chunks)  # ✅ automatically persisted
 
     return {
         "document_id": doc_id,
@@ -40,10 +37,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.post("/chat")
 def chat(question: str):
-    result = qa_chain.invoke(question)
+    answer = qa_chain.invoke(question)
     return {
-        "answer": result["result"],
-        "sources": [
-            doc.metadata for doc in result["source_documents"]
-        ]
+        "answer": answer
     }

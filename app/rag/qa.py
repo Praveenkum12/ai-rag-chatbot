@@ -8,7 +8,7 @@ def get_qa_chain(vectordb):
     retriever = vectordb.as_retriever(search_kwargs={"k": 5})
 
     llm = ChatOpenAI(
-        model="gpt-4.1-mini",
+        model="gpt-4.1-nano",
         temperature=0.2
     )
 
