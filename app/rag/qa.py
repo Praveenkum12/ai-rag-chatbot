@@ -3,14 +3,14 @@ from .prompt import build_prompt
 from .retriever import retrieve_context
 from .chroma_store import ChromaVectorStore
 
-client = OpenAI()
-
-
 def answer_question(
     question: str,
     vector_store: ChromaVectorStore,
     k: int = 5
 ) -> dict:
+    from openai import OpenAI
+    client = OpenAI()
+
     contexts = retrieve_context(question, vector_store, k=k)
     prompt = build_prompt(question, contexts)
 

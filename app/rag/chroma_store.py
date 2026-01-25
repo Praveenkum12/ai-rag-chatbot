@@ -7,11 +7,7 @@ from .vector_store import VectorStore
 
 class ChromaVectorStore(VectorStore):
     def __init__(self, collection_name: str = "documents"):
-        self.client = chromadb.Client(
-            Settings(
-                persist_directory="data/chroma"
-            )
-        )
+        self.client = chromadb.PersistentClient(path="data/chroma")
 
         self.embedding_fn = embedding_functions.OpenAIEmbeddingFunction(
             model_name="text-embedding-3-small"
@@ -43,6 +39,9 @@ class ChromaVectorStore(VectorStore):
             query_texts=[query],
             n_results=k
         )
+
+        if not results["documents"] or not results["documents"][0]:
+            return []
 
         return [
             {
