@@ -42,26 +42,38 @@ async def upload_document(file: UploadFile = File(...)):
     with file_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    raw_text = load_pdf(file_path)
-    cleaned_text = clean_text(raw_text)
-
-    # Chunks
-    chunks = chunk_text(cleaned_text)
+    # Load pages as objects
+    pages = load_pdf(file_path)
     
-    # Store in Chroma
-    # We use the official record creator to keep IDs and metadata consistent
-    chunk_list = create_chunk_records(chunks, doc_id)
+    all_chunks_to_store = []
     
-    # Add extra metadata: original filename
-    for chunk in chunk_list:
-        chunk["metadata"]["filename"] = file.filename
+    for page_obj in pages:
+        page_num = page_obj["page"]
+        text = clean_text(page_obj["text"])
+        
+        # Chunk this page
+        page_chunks = chunk_text(text)
+        
+        # Create records for this page
+        for i, chunk_text_content in enumerate(page_chunks):
+            all_chunks_to_store.append({
+                "id": f"{doc_id}_p{page_num}_c{i}",
+                "text": chunk_text_content,
+                "metadata": {
+                    "document_id": doc_id,
+                    "filename": file.filename,
+                    "page": page_num,
+                    "chunk_index": i
+                }
+            })
     
-    store_chunks(chunk_list, vector_store)
+    store_chunks(all_chunks_to_store, vector_store)
 
     return {
         "document_id": doc_id,
-        "chunks_stored": len(chunk_list),
-        "characters": len(cleaned_text)
+        "filename": file.filename,
+        "pages_processed": len(pages),
+        "chunks_stored": len(all_chunks_to_store)
     }
 
 @router.post("/chat")

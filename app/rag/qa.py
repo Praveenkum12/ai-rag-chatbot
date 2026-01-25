@@ -1,11 +1,11 @@
 from openai import OpenAI
 from .prompt import build_prompt
 from .retriever import retrieve_context
-from .chroma_store import ChromaVectorStore
+from .vector_store import VectorStore
 
 def answer_question(
     question: str,
-    vector_store: ChromaVectorStore,
+    vector_store: VectorStore,
     k: int = 5
 ) -> dict:
     from openai import OpenAI

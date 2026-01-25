@@ -1,10 +1,10 @@
 from typing import List, Dict
-from .chroma_store import ChromaVectorStore
+from .vector_store import VectorStore
 
 
 def retrieve_context(
     query: str,
-    vector_store: ChromaVectorStore,
+    vector_store: VectorStore,
     k: int = 5
 ) -> List[Dict]:
     """
