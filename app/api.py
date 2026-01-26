@@ -13,6 +13,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 class ChatRequest(BaseModel):
     question: str
 
+class SearchRequest(BaseModel):
+    query: str
+    k: int = 5
+
 
 @router.post("/documents/upload")
 async def upload_document(request: Request, file: UploadFile = File(...)):
@@ -44,9 +48,43 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
 
 
+@router.get("/documents")
+async def list_documents():
+    files = []
+    for path in DATA_DIR.glob("*"):
+        if path.is_file():
+            files.append({
+                "id": path.stem,
+                "name": path.name,
+                "type": path.suffix
+            })
+    return files
+
+
 @router.post("/chat")
 def chat(request: Request, chat_request: ChatRequest):
-    answer = request.app.state.qa_chain.invoke(chat_request.question)
+    result = request.app.state.qa_chain.invoke(chat_request.question)
+    
     return {
-        "answer": answer
+        "answer": result["answer"],
+        "sources": [
+            {
+                "content": doc.page_content,
+                "metadata": doc.metadata
+            } for doc in result["context"]
+        ]
     }
+
+
+@router.post("/search")
+def search(request: Request, search_request: SearchRequest):
+    results = request.app.state.vectordb.similarity_search(
+        search_request.query, 
+        k=search_request.k
+    )
+    return [
+        {
+            "content": doc.page_content,
+            "metadata": doc.metadata
+        } for doc in results
+    ]

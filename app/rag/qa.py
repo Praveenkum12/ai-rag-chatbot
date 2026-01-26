@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 
 
 def get_qa_chain(vectordb):
@@ -13,27 +13,31 @@ def get_qa_chain(vectordb):
     )
 
     prompt = ChatPromptTemplate.from_template(
-    """
-    You are a helpful assistant.
-    Answer the question using ONLY the context below.
-    If the answer is not in the context, say "I don't know."
+        """
+        You are a helpful assistant.
+        Answer the question using ONLY the context below.
+        If the answer is not in the context, say "I don't know."
 
-    Context:
-    {context}
+        Context:
+        {context}
 
-    Question:
-    {question}
-    """
-        )
+        Question:
+        {question}
+        """
+    )
 
+    # Use RunnableParallel to pass research (context) through to the final output
     chain = (
-        {
+        RunnableParallel({
             "context": retriever,
             "question": RunnablePassthrough()
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
+        }).assign(
+            answer=(
+                prompt
+                | llm
+                | StrOutputParser()
+            )
+        )
     )
 
     return chain
