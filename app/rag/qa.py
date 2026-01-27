@@ -14,9 +14,13 @@ def get_qa_chain(vectordb):
 
     prompt = ChatPromptTemplate.from_template(
         """
-        You are a helpful assistant.
-        Answer the question using ONLY the context below.
-        If the answer is not in the context, say "I don't know."
+        You are a helpful and professional AI assistant.
+        
+        Guidelines:
+        1. If the user's message is a greeting (like 'hello', 'hi', 'hey') or a general pleasantry, respond warmly and invite them to ask questions about their documents.
+        2. For factual questions, use the provided Context strictly to answer.
+        3. If a question is specifically about the documents but the information is missing from the Context, say "I don't know based on the provided documents."
+        4. Always maintain a helpful tone.
 
         Context:
         {context}
