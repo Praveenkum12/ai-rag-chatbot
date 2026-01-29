@@ -124,3 +124,31 @@ async def clear_documents(request: Request):
     except Exception as e:
         print(f"CRITICAL ERROR during clear: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
+
+
+@router.get("/documents/inspect")
+async def inspect_chroma(request: Request, limit: int = 10):
+    """
+    Returns the raw structure of chunks stored in Chroma for inspection.
+    """
+    try:
+        # Get data from Chroma
+        # We use the underlying collection to get raw data
+        db = request.app.state.vectordb
+        data = db.get(limit=limit, include=["documents", "metadatas"])
+        
+        inspection_results = []
+        for i in range(len(data["ids"])):
+            inspection_results.append({
+                "id": data["ids"][i],
+                "metadata": data["metadatas"][i],
+                "content_preview": data["documents"][i][:200] + "..." if data["documents"][i] else ""
+            })
+            
+        return {
+            "total_in_db": len(db.get()["ids"]),
+            "limit": limit,
+            "samples": inspection_results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Inspection failed: {str(e)}")
