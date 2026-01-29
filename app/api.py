@@ -40,6 +40,9 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
         chunks = load_and_split_document(str(file_path))
         
+        if not chunks:
+            raise ValueError("No text content could be extracted from this document.")
+
         # Inject cleaner metadata for easier retrieval/filtering
         for chunk in chunks:
             chunk.metadata["filename"] = file.filename
