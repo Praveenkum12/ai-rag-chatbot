@@ -395,7 +395,7 @@
           const div = document.createElement("div");
           div.setAttribute("data-doc-id", doc.id);
           div.className =
-            "doc-item flex items-center gap-3 p-3 glass rounded-xl hover:bg-white/5 cursor-pointer transition-all border border-transparent";
+            "doc-item group flex items-center gap-2 p-3 glass rounded-xl hover:bg-white/5 cursor-pointer transition-all border border-transparent";
           div.onclick = () => toggleDocSelection(doc.id);
 
           const isPDF = doc.type.toLowerCase().includes("pdf");
@@ -414,10 +414,19 @@
                         </svg>
                     </div>
                 </div>
-                <div class="ml-3 overflow-hidden">
-                    <div class="text-sm font-medium text-white truncate w-40">${doc.name}</div>
+                <div class="ml-1 flex-1 overflow-hidden">
+                    <div class="text-sm font-medium text-white truncate w-32">${doc.name}</div>
                     <div class="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider tabular-nums font-mono opacity-60">#${doc.id.substring(0, 8)}...</div>
                 </div>
+                <button 
+                  onclick="event.stopPropagation(); deleteDoc('${doc.id}', '${doc.name}')"
+                  class="p-2 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all"
+                  title="Delete Document"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                  </svg>
+                </button>
             `;
           container.appendChild(div);
         });
@@ -435,6 +444,31 @@
           console.error("Failed to fetch docs", e);
         }
       }
+
+      async function deleteDoc(docId, fileName) {
+        if (!confirm(`Are you sure you want to delete "${fileName}"?`)) return;
+
+        try {
+          const res = await fetch(`/documents/${docId}`, {
+            method: "DELETE",
+          });
+
+          if (res.ok) {
+            // Remove from selected list if it was there
+            const index = selectedDocIds.indexOf(docId);
+            if (index > -1) selectedDocIds.splice(index, 1);
+
+            fetchDocs();
+          } else {
+            const err = await res.json();
+            alert("Delete failed: " + err.detail);
+          }
+        } catch (err) {
+          console.error("Delete error:", err);
+          alert("Failed to delete document.");
+        }
+      }
+
       fetchDocs();
 
       async function clearData() {

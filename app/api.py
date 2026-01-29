@@ -228,6 +228,36 @@ def search(request: Request, search_request: SearchRequest):
     ]
 
 
+@router.delete("/documents/{doc_id}")
+async def delete_document(request: Request, doc_id: str):
+    """
+    Deletes a single document from both Chroma and the disk.
+    """
+    try:
+        # 1. Delete from Chroma
+        # We use the doc_id metadata filter to find and remove all associated chunks
+        request.app.state.vectordb.delete(where={"doc_id": doc_id})
+        print(f"Deleted chunks for doc_id: {doc_id} from Chroma.")
+
+        # 2. Delete from Disk
+        # We search for any file starting with this doc_id (could be .pdf, .txt, .md)
+        deleted_from_disk = False
+        for file_path in DATA_DIR.glob(f"{doc_id}.*"):
+            try:
+                file_path.unlink()
+                deleted_from_disk = True
+            except Exception as e:
+                print(f"Error deleting file {file_path}: {e}")
+
+        if not deleted_from_disk:
+            print(f"Warning: No file found on disk for ID {doc_id}")
+
+        return {"message": f"Document {doc_id} deleted successfully."}
+    except Exception as e:
+        print(f"Error deleting document {doc_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
 @router.post("/documents/clear")
 async def clear_documents(request: Request):
     """
