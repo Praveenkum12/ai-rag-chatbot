@@ -69,16 +69,33 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
 
 @router.get("/documents")
-async def list_documents():
-    files = []
-    for path in DATA_DIR.glob("*"):
-        if path.is_file():
-            files.append({
-                "id": path.stem,
-                "name": path.name,
-                "type": path.suffix
-            })
-    return files
+async def list_documents(request: Request):
+    """
+    Returns a list of unique documents by querying the vector database's metadata.
+    """
+    try:
+        # Get all metadata from Chroma
+        # We need to know which doc_id belongs to which original filename
+        data = request.app.state.vectordb.get(include=["metadatas"])
+        
+        unique_docs = {}
+        if data and "metadatas" in data:
+            for meta in data["metadatas"]:
+                d_id = meta.get("doc_id")
+                fname = meta.get("filename", "Unknown")
+                ftype = meta.get("file_type", "txt")
+                
+                if d_id and d_id not in unique_docs:
+                    unique_docs[d_id] = {
+                        "id": d_id,
+                        "name": fname,
+                        "type": ftype
+                    }
+        
+        return list(unique_docs.values())
+    except Exception as e:
+        print(f"Error listing documents: {e}")
+        return []
 
 
 @router.post("/chat")
