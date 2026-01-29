@@ -39,12 +39,20 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
             f.write(await file.read())
 
         chunks = load_and_split_document(str(file_path))
+        
+        # Inject cleaner metadata for easier retrieval/filtering
+        for chunk in chunks:
+            chunk.metadata["filename"] = file.filename
+            chunk.metadata["doc_id"] = doc_id
+            # Optionally simplify the source to just the ID
+            chunk.metadata["source"] = doc_id 
+
         request.app.state.vectordb.add_documents(chunks)
 
         return {
             "document_id": doc_id,
-            "chunks_added": len(chunks),
-            "filename": file.filename
+            "filename": file.filename,
+            "chunks_added": len(chunks)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
