@@ -9,3 +9,5 @@ fastapi
 uvicorn
 langchain-text-splitters
 python-multipart
+rank_bm25
+langchain-classic

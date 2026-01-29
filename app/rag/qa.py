@@ -4,6 +4,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 
 
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
+
 def get_llm():
     return ChatOpenAI(
         model="gpt-4.1-nano",
@@ -13,25 +16,62 @@ def get_llm():
 def get_prompt():
     return ChatPromptTemplate.from_template(
         """
-        You are a helpful and professional AI assistant.
-        
-        Guidelines:
-        1. If the user's message is a greeting (like 'hello', 'hi', 'hey') or a general pleasantry, respond warmly and invite them to ask questions about their documents.
-        2. For factual questions, use the provided Context strictly to answer.
-        3. If a question is specifically about the documents but the information is missing from the Context, say "I don't know based on the provided documents."
-        4. Always maintain a helpful tone.
+        Use the provided context to answer the user's question. 
+        If the answer is not present in the context, say "I don't know." 
+        Do not use outside knowledge.
 
         Context:
         {context}
 
         Question:
         {question}
+        Answer:
         """
     )
 
+def get_hybrid_retriever(vectordb, search_kwargs={"k": 5}):
+    # 1. Get the Vector (Semantic) Retriever
+    vector_retriever = vectordb.as_retriever(search_kwargs=search_kwargs)
+    
+    # 2. Build the Keyword (BM25) Retriever with the SAME filters
+    # We must restrict BM25 documents to match the metadata filter
+    filters = search_kwargs.get("filter")
+    
+    # Fetch content from Chroma
+    if filters:
+        # Chroma .get() supports complex filters
+        all_data = vectordb.get(where=filters, include=["documents", "metadatas"])
+    else:
+        all_data = vectordb.get(include=["documents", "metadatas"])
+        
+    all_docs = []
+    from langchain_core.documents import Document
+    
+    if all_data and "ids" in all_data:
+        for i in range(len(all_data["ids"])):
+            all_docs.append(Document(
+                page_content=all_data["documents"][i],
+                metadata=all_data["metadatas"][i]
+            ))
+    
+    # If no docs match the filter, just return the vector retriever 
+    # (which will also return nothing, but safely)
+    if not all_docs:
+        return vector_retriever
+
+    keyword_retriever = BM25Retriever.from_documents(all_docs)
+    keyword_retriever.k = search_kwargs.get("k", 5)
+    
+    # 3. Combine them (Ensemble)
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[vector_retriever, keyword_retriever],
+        weights=[0.5, 0.5]
+    )
+    return ensemble_retriever
+
 
 def get_qa_chain(vectordb):
-    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+    retriever = get_hybrid_retriever(vectordb)
     llm = get_llm()
     prompt = get_prompt()
 

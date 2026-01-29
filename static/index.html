@@ -480,7 +480,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               question,
-              doc_ids: selectedDocIds.length > 0 ? selectedDocIds : null,
+              doc_ids: selectedDocIds,
             }),
           });
 
@@ -490,7 +490,7 @@
           } else {
             updateBotMessage(
               botMsgId,
-              "Sorry, I encountered an error processing your request.",
+              "I'm sorry, I don't know how to answer that based on the current system state. Please try again.",
             );
           }
         } catch (err) {
@@ -520,8 +520,10 @@
         const p = msgDiv.querySelector("p");
         p.textContent = text;
 
+        const sourcesDiv = msgDiv.querySelector(".sources");
+        sourcesDiv.innerHTML = ""; // Clear existing
+
         if (sources && sources.length > 0) {
-          const sourcesDiv = msgDiv.querySelector(".sources");
           sourcesDiv.innerHTML =
             '<span class="text-[10px] text-slate-500 w-full mb-1">Citations:</span>';
           sources.forEach((src, idx) => {

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import uuid
 
@@ -15,8 +15,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChatRequest(BaseModel):
     question: str
-    doc_ids: List[str] = None
-    file_type: str = None
+    doc_ids: Optional[List[str]] = []
+    file_type: Optional[str] = None
 
 class SearchRequest(BaseModel):
     query: str
@@ -83,37 +83,64 @@ async def list_documents():
 
 @router.post("/chat")
 def chat(request: Request, chat_request: ChatRequest):
-    # Construct filters for retrieval
-    filters = {}
-    if chat_request.doc_ids:
-        if len(chat_request.doc_ids) == 1:
-            filters["doc_id"] = chat_request.doc_ids[0]
-        else:
-            filters["doc_id"] = {"$in": chat_request.doc_ids}
-            
-    if chat_request.file_type:
-        filters["file_type"] = chat_request.file_type
+    try:
+        # Construct filters for retrieval
+        filters = {}
+        if chat_request.doc_ids:
+            if len(chat_request.doc_ids) == 1:
+                filters["doc_id"] = chat_request.doc_ids[0]
+            else:
+                filters["doc_id"] = {"$in": chat_request.doc_ids}
+        if chat_request.file_type:
+            filters["file_type"] = chat_request.file_type
 
-    # If we have filters, we must use manual retrieval
-    if filters:
-        print(f"Applying filters: {filters}")
-        # Search manually with filters
-        retriever = request.app.state.vectordb.as_retriever(
-            search_kwargs={"k": 5, "filter": filters}
-        )
-        docs = retriever.invoke(chat_request.question)
-        
-        # Manually run the "Brain" part (Prompt + LLM)
-        from app.rag.qa import get_llm, get_prompt
+        from app.rag.qa import get_hybrid_retriever, get_llm, get_prompt
         from langchain_core.output_parsers import StrOutputParser
         
+        # 1. Get Hybrid Retriever
+        retriever = get_hybrid_retriever(
+            request.app.state.vectordb, 
+            search_kwargs={"k": 5, "filter": filters if filters else None}
+        )
+        
+        # 2. Invoke retriever
+        docs = retriever.invoke(chat_request.question)
+
+        # --- RELEVANCE FILTERING ---
+        # Since EnsembleRetriever doesn't provide scores, we do a quick 
+        # similarity check to see if THESE docs are actually relevant.
+        if docs:
+            # Check the best match's distance
+            # Lower distance = Higher relevance
+            test_search = request.app.state.vectordb.similarity_search_with_score(
+                chat_request.question, k=1, filter=filters if filters else None
+            )
+            if test_search:
+                best_doc, best_score = test_search[0]
+                # Relaxed threshold: High distance (> 1.1) means it's likely a total guess
+                if best_score > 1.1:
+                    print(f"DEBUG: Extremely low relevance detected (score {best_score:.4f}). Hiding sources.")
+                    docs = [] 
+        # ---------------------------
+
+        # 3. Check if it's a greeting
+        is_greeting = chat_request.question.lower() in ["hi", "hello", "hey", "greetings"]
+        
+        # 4. Run LLM
         llm = get_llm()
         prompt = get_prompt()
         answer_chain = prompt | llm | StrOutputParser()
         
+        # Join and Clean docs for the AI
+        context_text = ""
+        if docs:
+            raw_text = "\n\n".join([doc.page_content for doc in docs])
+            # Clean up common PDF messy characters to help the small model
+            context_text = raw_text.replace("♂", "").replace("¶", "").replace("•", "-")
+        
         answer = answer_chain.invoke({
             "question": chat_request.question,
-            "context": docs
+            "context": context_text if context_text else "No relevant information found."
         })
         
         return {
@@ -123,20 +150,13 @@ def chat(request: Request, chat_request: ChatRequest):
                     "content": doc.page_content,
                     "metadata": doc.metadata
                 } for doc in docs
-            ]
+            ] if not is_greeting and docs else []
         }
-    
-    # Otherwise, use the optimized global chain (Global RAG)
-    else:
-        result = request.app.state.qa_chain.invoke(chat_request.question)
+    except Exception as e:
+        print(f"CRITICAL CHAT ERROR: {str(e)}")
         return {
-            "answer": result["answer"],
-            "sources": [
-                {
-                    "content": doc.page_content,
-                    "metadata": doc.metadata
-                } for doc in result["context"]
-            ]
+            "answer": "I don't know.",
+            "sources": []
         }
 
 
