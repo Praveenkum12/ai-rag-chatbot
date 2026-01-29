@@ -77,6 +77,18 @@
       .animate-fadeIn {
         animation: fadeIn 0.3s ease forwards;
       }
+      .custom-select {
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 1rem;
+        padding-right: 2rem;
+      }
+      .custom-select option {
+        background-color: #0f172a;
+        color: #f8fafc;
+      }
     </style>
   </head>
   <body class="flex flex-col h-screen overflow-hidden">
@@ -139,9 +151,34 @@
               Clear All
             </button>
           </div>
+          <!-- Filters -->
+          <div class="mb-4">
+            <div class="flex items-center gap-2">
+              <select
+                id="typeFilter"
+                onchange="applyFilters()"
+                class="custom-select flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 cursor-pointer hover:bg-white/10 transition-all font-medium"
+              >
+                <option value="all">Document Type</option>
+                <option value="pdf">PDF Files</option>
+                <option value="md">Markdown</option>
+                <option value="txt">Plain Text</option>
+              </select>
+              <select
+                id="dateFilter"
+                onchange="applyFilters()"
+                class="custom-select flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 cursor-pointer hover:bg-white/10 transition-all font-medium"
+              >
+                <option value="any">Any Time</option>
+                <option value="today">Today</option>
+                <option value="week">This Week</option>
+              </select>
+            </div>
+          </div>
+
           <div
             id="docList"
-            class="space-y-2 overflow-y-auto max-h-[calc(100vh-250px)]"
+            class="space-y-2 overflow-y-auto max-h-[calc(100vh-320px)] custom-scrollbar"
           >
             <!-- Documents will be list here -->
           </div>
@@ -288,6 +325,9 @@
     <script>
       lucide.createIcons();
       let selectedDocIds = [];
+      let allFetchedDocs = [];
+      let activeFileType = "all";
+      let activeDateFilter = "any";
 
       function clearSelection() {
         selectedDocIds = [];
@@ -327,35 +367,45 @@
         updateUI();
       }
 
-      // Load document list
-      async function fetchDocs() {
-        try {
-          const res = await fetch("/documents");
-          const docs = await res.json();
-          const container = document.getElementById("docList");
-          container.innerHTML = "";
+      function applyFilters() {
+        activeFileType = document.getElementById("typeFilter").value;
+        activeDateFilter = document.getElementById("dateFilter").value;
+        renderDocs();
+      }
 
-          if (docs.length === 0) {
-            container.innerHTML =
-              '<p class="text-slate-500 text-xs text-center py-4">No documents uploaded yet</p>';
-            return;
-          }
+      function renderDocs() {
+        const container = document.getElementById("docList");
+        container.innerHTML = "";
 
-          docs.forEach((doc) => {
-            const div = document.createElement("div");
-            div.setAttribute("data-doc-id", doc.id);
-            div.className =
-              "doc-item flex items-center gap-3 p-3 glass rounded-xl hover:bg-white/5 cursor-pointer transition-all border border-transparent";
-            div.onclick = () => toggleDocSelection(doc.id);
-            const isPDF = doc.type.toLowerCase().includes("pdf");
-            const icon = isPDF
-              ? `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path><text x="8" y="18" font-size="5" font-weight="bold" fill="currentColor" font-family="sans-serif">PDF</text></svg>`
-              : `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>`;
-            const iconColor = isPDF ? "text-red-400" : "text-indigo-400";
-            const iconBg = isPDF ? "bg-red-400/5" : "bg-white/5";
+        const filteredDocs = allFetchedDocs.filter((doc) => {
+          const typeMatch =
+            activeFileType === "all" || doc.type === activeFileType;
+          return typeMatch;
+          // Note: Local date filtering is complex due to JS date parsing,
+          // we'll rely on the backend for the actual search filtering.
+        });
 
-            const isSelected = selectedDocIds.includes(doc.id);
-            div.innerHTML = `
+        if (filteredDocs.length === 0) {
+          container.innerHTML =
+            '<p class="text-slate-500 text-xs text-center py-4">No matching documents</p>';
+          return;
+        }
+
+        filteredDocs.forEach((doc) => {
+          const div = document.createElement("div");
+          div.setAttribute("data-doc-id", doc.id);
+          div.className =
+            "doc-item flex items-center gap-3 p-3 glass rounded-xl hover:bg-white/5 cursor-pointer transition-all border border-transparent";
+          div.onclick = () => toggleDocSelection(doc.id);
+
+          const isPDF = doc.type.toLowerCase().includes("pdf");
+          const icon = isPDF
+            ? `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path><text x="8" y="18" font-size="5" font-weight="bold" fill="currentColor" font-family="sans-serif">PDF</text></svg>`
+            : `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>`;
+          const iconColor = isPDF ? "text-red-400" : "text-indigo-400";
+          const iconBg = isPDF ? "bg-red-400/5" : "bg-white/5";
+
+          div.innerHTML = `
                 <div class="relative w-10 h-10 flex items-center justify-center rounded-xl ${iconBg} ${iconColor}">
                     ${icon}
                     <div class="check-badge hidden absolute -top-1 -right-1 w-4 h-4 bg-indigo-500 rounded-full border-2 border-slate-900 flex items-center justify-center">
@@ -369,9 +419,17 @@
                     <div class="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider tabular-nums font-mono opacity-60">#${doc.id.substring(0, 8)}...</div>
                 </div>
             `;
-            container.appendChild(div);
-          });
-          updateUI();
+          container.appendChild(div);
+        });
+        updateUI();
+      }
+
+      // Load document list
+      async function fetchDocs() {
+        try {
+          const res = await fetch("/documents");
+          allFetchedDocs = await res.json();
+          renderDocs();
           lucide.createIcons();
         } catch (e) {
           console.error("Failed to fetch docs", e);
@@ -483,6 +541,8 @@
             body: JSON.stringify({
               question,
               doc_ids: selectedDocIds,
+              file_type: activeFileType,
+              date_filter: activeDateFilter,
             }),
           });
 

@@ -13,15 +13,20 @@ router = APIRouter()
 DATA_DIR = Path("data/documents")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+from datetime import datetime, timedelta
+
 class ChatRequest(BaseModel):
     question: str
     doc_ids: Optional[List[str]] = []
     file_type: Optional[str] = None
+    date_filter: Optional[str] = None # 'today', 'week', 'any'
 
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
     doc_ids: List[str] = None
+    file_type: Optional[str] = None
+    date_filter: Optional[str] = None
 
 
 @router.post("/documents/upload")
@@ -102,14 +107,35 @@ async def list_documents(request: Request):
 def chat(request: Request, chat_request: ChatRequest):
     try:
         # Construct filters for retrieval
-        filters = {}
+        meta_filters = []
+        
+        # 1. Doc IDs filter
         if chat_request.doc_ids:
             if len(chat_request.doc_ids) == 1:
-                filters["doc_id"] = chat_request.doc_ids[0]
+                meta_filters.append({"doc_id": {"$eq": chat_request.doc_ids[0]}})
             else:
-                filters["doc_id"] = {"$in": chat_request.doc_ids}
-        if chat_request.file_type:
-            filters["file_type"] = chat_request.file_type
+                meta_filters.append({"doc_id": {"$in": chat_request.doc_ids}})
+        
+        # 2. File Type filter
+        if chat_request.file_type and chat_request.file_type != "all":
+            meta_filters.append({"file_type": {"$eq": chat_request.file_type}})
+            
+        # 3. Date filter
+        if chat_request.date_filter and chat_request.date_filter != "any":
+            now = datetime.now()
+            if chat_request.date_filter == "today":
+                cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif chat_request.date_filter == "week":
+                cutoff = now - timedelta(days=7)
+            
+            meta_filters.append({"processed_at": {"$gte": cutoff.isoformat()}})
+
+        # Combine filters with $and if multiple exist
+        filters = None
+        if len(meta_filters) == 1:
+            filters = meta_filters[0]
+        elif len(meta_filters) > 1:
+            filters = {"$and": meta_filters}
 
         from app.rag.qa import get_hybrid_retriever, get_llm, get_prompt
         from langchain_core.output_parsers import StrOutputParser
