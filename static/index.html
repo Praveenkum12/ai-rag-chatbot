@@ -99,8 +99,16 @@
         <button
           onclick="toggleUpload()"
           class="p-2 glass rounded-lg hover:bg-white/10 transition-colors"
+          title="Upload Document"
         >
           <i data-lucide="plus" class="w-5 h-5"></i>
+        </button>
+        <button
+          onclick="clearData()"
+          class="p-2 glass rounded-lg hover:bg-red-500/20 text-red-400 border-red-500/20 hover:border-red-500/40 transition-colors"
+          title="Clear All Data"
+        >
+          <i data-lucide="trash-2" class="w-5 h-5"></i>
         </button>
         <div class="h-8 w-[1px] bg-white/10"></div>
         <div class="flex items-center gap-2">
@@ -305,8 +313,53 @@
           console.error("Failed to fetch docs", e);
         }
       }
-
       fetchDocs();
+
+      async function clearData() {
+        if (
+          !confirm(
+            "Are you sure you want to clear all documents and the vector store? This action cannot be undone.",
+          )
+        ) {
+          return;
+        }
+
+        console.log("Attempting to clear data...");
+        try {
+          const res = await fetch("/documents/clear", {
+            method: "POST",
+          });
+
+          console.log("Response status:", res.status);
+
+          if (res.ok) {
+            const data = await res.json();
+            console.log("Server response:", data);
+            alert(data.message);
+            fetchDocs();
+            document.getElementById("chatContainer").innerHTML = `
+              <div class="max-w-3xl mx-auto text-center mt-12 mb-8">
+                <h2 class="text-3xl font-bold mb-4 font-outfit">
+                  Hello! How can I help today?
+                </h2>
+                <p class="text-slate-400">
+                  Ask me anything about your uploaded documents. I'll provide
+                  answers with source citations.
+                </p>
+              </div>
+            `;
+          } else {
+            const err = await res.json();
+            console.error("Clear failed:", err);
+            alert("Error: " + (err.detail || "Unknown error"));
+          }
+        } catch (err) {
+          console.error("Fetch error:", err);
+          alert(
+            "Failed to clear data - Please make sure you are on http://127.0.0.1:8000 (NOT port 5500)",
+          );
+        }
+      }
 
       function toggleUpload() {
         const overlay = document.getElementById("uploadOverlay");

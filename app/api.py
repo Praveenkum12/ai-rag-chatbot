@@ -3,6 +3,8 @@ from pathlib import Path
 import uuid
 
 from app.rag.ingest import load_and_split_document
+from app.rag.vectorstore import clear_vectorstore
+from app.rag.qa import get_qa_chain
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -88,3 +90,37 @@ def search(request: Request, search_request: SearchRequest):
             "metadata": doc.metadata
         } for doc in results
     ]
+
+
+@router.post("/documents/clear")
+async def clear_documents(request: Request):
+    """
+    Clears the Chroma vector store and resets the QA chain.
+    """
+    print("Received request to clear documents and vector store...")
+    try:
+        # Clear Chroma
+        request.app.state.vectordb = clear_vectorstore(request.app.state.vectordb)
+        print("Chroma collection deleted and re-initialized.")
+        
+        # Re-initialize QA chain with the new (empty) vectordb
+        request.app.state.qa_chain = get_qa_chain(request.app.state.vectordb)
+        print("QA chain re-initialized.")
+        
+        # Delete files in DATA_DIR
+        deleted_count = 0
+        for file_path in DATA_DIR.glob("*"):
+            if file_path.is_file():
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                except PermissionError:
+                    print(f"Warning: Could not delete {file_path} because it is in use.")
+                except Exception as e:
+                    print(f"Error deleting {file_path}: {e}")
+
+        print(f"Cleaned up {deleted_count} files from disk.")
+        return {"message": "Success! Chroma and document storage cleared."}
+    except Exception as e:
+        print(f"CRITICAL ERROR during clear: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
