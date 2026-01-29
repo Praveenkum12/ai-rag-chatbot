@@ -160,6 +160,9 @@ def chat(request: Request, chat_request: ChatRequest):
             "context": context_text if context_text else "No relevant information found."
         })
         
+        # Hide sources if it's a greeting OR if the AI says "I don't know"
+        hide_sources = is_greeting or "i don't know" in answer.lower()
+        
         return {
             "answer": answer,
             "sources": [
@@ -167,7 +170,7 @@ def chat(request: Request, chat_request: ChatRequest):
                     "content": doc.page_content,
                     "metadata": doc.metadata
                 } for doc in docs
-            ] if not is_greeting and docs else []
+            ] if not hide_sources and docs else []
         }
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {str(e)}")
