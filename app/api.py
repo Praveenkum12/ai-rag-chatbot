@@ -174,16 +174,40 @@ def chat(request: Request, chat_request: ChatRequest):
         prompt = get_prompt()
         answer_chain = prompt | llm | StrOutputParser()
         
-        # Join and Clean docs for the AI
-        context_text = ""
-        if docs:
-            raw_text = "\n\n".join([doc.page_content for doc in docs])
-            # Clean up common PDF messy characters to help the small model
-            context_text = raw_text.replace("♂", "").replace("¶", "").replace("•", "-")
+        # Clean and Label Docs
+        # We also perform a quick scoring pass to get confidence percentages
+        # Match each doc to its distance score from the vector store
+        context_parts = []
+        source_data = []
+
+        # Get scores for the top docs in this specific search
+        # Note: We use search_with_score to get the raw numbers
+        scored_results = {
+            doc.page_content: score 
+            for doc, score in request.app.state.vectordb.similarity_search_with_score(
+                chat_request.question, k=10, filter=filters if filters else None
+            )
+        }
+
+        for i, doc in enumerate(docs):
+            filename = doc.metadata.get("filename", "Unknown File")
+            clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
+            context_parts.append(f"--- Document: {filename} (Part {i+1}) ---\n{clean_content}")
+            
+            # Calculate Percentage: 0.0 distance is 100%, 1.2+ is ~0%
+            raw_score = scored_results.get(doc.page_content, 1.0)
+            confidence = max(0, min(100, round((1 - (raw_score / 1.5)) * 100)))
+            
+            source_data.append({
+                "content": doc.page_content,
+                "metadata": {**doc.metadata, "confidence": confidence}
+            })
+        
+        context_text = "\n\n".join(context_parts)
         
         answer = answer_chain.invoke({
             "question": chat_request.question,
-            "context": context_text if context_text else "No relevant information found."
+            "context": context_text if context_text else "No information available."
         })
         
         # Hide sources if it's a greeting OR if the AI says "I don't know"
@@ -191,12 +215,7 @@ def chat(request: Request, chat_request: ChatRequest):
         
         return {
             "answer": answer,
-            "sources": [
-                {
-                    "content": doc.page_content,
-                    "metadata": doc.metadata
-                } for doc in docs
-            ] if not hide_sources and docs else []
+            "sources": source_data if not hide_sources and docs else []
         }
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {str(e)}")

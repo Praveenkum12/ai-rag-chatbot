@@ -262,7 +262,23 @@
             id="sourceContent"
             class="p-8 overflow-y-auto text-slate-300 leading-relaxed font-inter"
           ></div>
-          <div class="p-4 bg-white/5 flex justify-end">
+          <div class="p-4 bg-white/5 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+              <span
+                class="text-[10px] uppercase text-slate-500 font-bold tracking-widest"
+                >Confidence</span
+              >
+              <div class="w-24 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  id="sourceScoreBar"
+                  class="h-full rounded-full animate-barFill"
+                ></div>
+              </div>
+              <span
+                id="sourceScoreText"
+                class="text-xs font-mono font-bold"
+              ></span>
+            </div>
             <span
               id="sourceMeta"
               class="text-xs text-indigo-400 font-mono"
@@ -623,21 +639,58 @@
           sourcesDiv.innerHTML =
             '<span class="text-[10px] text-slate-500 w-full mb-1">Citations:</span>';
           sources.forEach((src, idx) => {
+            const conf = src.metadata.confidence || 0;
+            const color =
+              conf > 80
+                ? "text-green-400 border-green-500/30 bg-green-500/5 hover:bg-green-500/10"
+                : conf > 40
+                  ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10"
+                  : "text-red-400 border-red-500/30 bg-red-500/5 hover:bg-red-500/10";
+
             const btn = document.createElement("button");
-            btn.className =
-              "px-3 py-1 bg-white/5 border border-white/10 rounded-full text-xs text-indigo-300 hover:bg-white/10 transition-colors";
-            btn.textContent = `Source [${idx + 1}]`;
-            btn.onclick = () => showSource(src.content, src.metadata);
+            btn.className = `px-3 py-1.5 border rounded-full text-xs flex items-center gap-2 transition-all ${color}`;
+            btn.innerHTML = `
+              <span>Source [${idx + 1}]</span>
+              <span class="opacity-60 font-mono text-[10px]">${conf}%</span>
+            `;
+            btn.onclick = () => showSource(src.content, src.metadata, idx + 1);
             sourcesDiv.appendChild(btn);
           });
         }
       }
 
-      function showSource(content, meta) {
+      function showSource(content, meta, index) {
         const modal = document.getElementById("sourceModal");
         document.getElementById("sourceContent").textContent = content;
+
+        const score = meta.confidence || 0;
+        const colorClass =
+          score > 80
+            ? "bg-green-500"
+            : score > 40
+              ? "bg-yellow-500"
+              : "bg-red-500";
+        const textClass =
+          score > 80
+            ? "text-green-400"
+            : score > 40
+              ? "text-yellow-400"
+              : "text-red-400";
+
+        const bar = document.getElementById("sourceScoreBar");
+        if (bar) {
+          bar.style.width = score + "%";
+          bar.className = `h-full rounded-full animate-barFill ${colorClass}`;
+        }
+
+        const scoreText = document.getElementById("sourceScoreText");
+        if (scoreText) {
+          scoreText.textContent = score + "%";
+          scoreText.className = `text-xs font-mono font-bold ${textClass}`;
+        }
+
         document.getElementById("sourceMeta").textContent =
-          JSON.stringify(meta);
+          `${meta.filename} • Chunk ${index}`;
         modal.classList.remove("hidden");
       }
 
