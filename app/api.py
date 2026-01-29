@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from typing import List
 from pathlib import Path
 import uuid
 
@@ -14,10 +15,13 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChatRequest(BaseModel):
     question: str
+    doc_ids: List[str] = None
+    file_type: str = None
 
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
+    doc_ids: List[str] = None
 
 
 @router.post("/documents/upload")
@@ -43,11 +47,14 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         if not chunks:
             raise ValueError("No text content could be extracted from this document.")
 
+        from datetime import datetime
+        
         # Inject cleaner metadata for easier retrieval/filtering
         for chunk in chunks:
             chunk.metadata["filename"] = file.filename
             chunk.metadata["doc_id"] = doc_id
-            # Optionally simplify the source to just the ID
+            chunk.metadata["file_type"] = file_ext.replace(".", "")
+            chunk.metadata["processed_at"] = datetime.now().isoformat()
             chunk.metadata["source"] = doc_id 
 
         request.app.state.vectordb.add_documents(chunks)
@@ -76,24 +83,76 @@ async def list_documents():
 
 @router.post("/chat")
 def chat(request: Request, chat_request: ChatRequest):
-    result = request.app.state.qa_chain.invoke(chat_request.question)
+    # Construct filters for retrieval
+    filters = {}
+    if chat_request.doc_ids:
+        if len(chat_request.doc_ids) == 1:
+            filters["doc_id"] = chat_request.doc_ids[0]
+        else:
+            filters["doc_id"] = {"$in": chat_request.doc_ids}
+            
+    if chat_request.file_type:
+        filters["file_type"] = chat_request.file_type
+
+    # If we have filters, we must use manual retrieval
+    if filters:
+        print(f"Applying filters: {filters}")
+        # Search manually with filters
+        retriever = request.app.state.vectordb.as_retriever(
+            search_kwargs={"k": 5, "filter": filters}
+        )
+        docs = retriever.invoke(chat_request.question)
+        
+        # Manually run the "Brain" part (Prompt + LLM)
+        from app.rag.qa import get_llm, get_prompt
+        from langchain_core.output_parsers import StrOutputParser
+        
+        llm = get_llm()
+        prompt = get_prompt()
+        answer_chain = prompt | llm | StrOutputParser()
+        
+        answer = answer_chain.invoke({
+            "question": chat_request.question,
+            "context": docs
+        })
+        
+        return {
+            "answer": answer,
+            "sources": [
+                {
+                    "content": doc.page_content,
+                    "metadata": doc.metadata
+                } for doc in docs
+            ]
+        }
     
-    return {
-        "answer": result["answer"],
-        "sources": [
-            {
-                "content": doc.page_content,
-                "metadata": doc.metadata
-            } for doc in result["context"]
-        ]
-    }
+    # Otherwise, use the optimized global chain (Global RAG)
+    else:
+        result = request.app.state.qa_chain.invoke(chat_request.question)
+        return {
+            "answer": result["answer"],
+            "sources": [
+                {
+                    "content": doc.page_content,
+                    "metadata": doc.metadata
+                } for doc in result["context"]
+            ]
+        }
 
 
 @router.post("/search")
 def search(request: Request, search_request: SearchRequest):
+    filter_dict = None
+    if search_request.doc_ids:
+        if len(search_request.doc_ids) == 1:
+            filter_dict = {"doc_id": search_request.doc_ids[0]}
+        else:
+            filter_dict = {"doc_id": {"$in": search_request.doc_ids}}
+
     results = request.app.state.vectordb.similarity_search(
         search_request.query, 
-        k=search_request.k
+        k=search_request.k,
+        filter=filter_dict
     )
     return [
         {

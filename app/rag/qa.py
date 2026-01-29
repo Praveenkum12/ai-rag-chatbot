@@ -4,15 +4,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 
 
-def get_qa_chain(vectordb):
-    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
-
-    llm = ChatOpenAI(
+def get_llm():
+    return ChatOpenAI(
         model="gpt-4.1-nano",
         temperature=0.2
     )
 
-    prompt = ChatPromptTemplate.from_template(
+def get_prompt():
+    return ChatPromptTemplate.from_template(
         """
         You are a helpful and professional AI assistant.
         
@@ -30,7 +29,13 @@ def get_qa_chain(vectordb):
         """
     )
 
-    # Use RunnableParallel to pass research (context) through to the final output
+
+def get_qa_chain(vectordb):
+    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+    llm = get_llm()
+    prompt = get_prompt()
+
+    # This is the "Full Auto" chain used at startup
     chain = (
         RunnableParallel({
             "context": retriever,

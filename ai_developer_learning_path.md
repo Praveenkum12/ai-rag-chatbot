@@ -151,11 +151,11 @@ Cite which document section you used.
 
 ### Testing Checklist
 
-- [ ] Upload a 10-page PDF and verify all pages are processed
-- [ ] Ask questions that should be answerable from docs
-- [ ] Ask questions NOT in docs (should say "I don't know")
-- [ ] Verify citations point to correct document sections
-- [ ] Test with different document types (PDF, TXT, MD)
+- [-] Upload a 10-page PDF and verify all pages are processed
+- [-] Ask questions that should be answerable from docs
+- [-] Ask questions NOT in docs (should say "I don't know")
+- [-] Verify citations point to correct document sections
+- [-] Test with different document types (PDF, TXT, MD)
 
 ### Bonus Challenges
 
