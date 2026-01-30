@@ -344,6 +344,7 @@
       let allFetchedDocs = [];
       let activeFileType = "all";
       let activeDateFilter = "any";
+      let chatHistory = []; // Our new memory box
 
       function clearSelection() {
         selectedDocIds = [];
@@ -593,12 +594,22 @@
               doc_ids: selectedDocIds,
               file_type: activeFileType,
               date_filter: activeDateFilter,
+              history: chatHistory, // Send the full history
             }),
           });
 
           if (res.ok) {
             const data = await res.json();
             updateBotMessage(botMsgId, data.answer, data.sources);
+
+            // Add this turn to memory
+            chatHistory.push({ role: "user", content: question });
+            chatHistory.push({ role: "assistant", content: data.answer });
+
+            // Keep only the last 10 messages to save space
+            if (chatHistory.length > 10) {
+              chatHistory = chatHistory.slice(-10);
+            }
           } else {
             updateBotMessage(
               botMsgId,

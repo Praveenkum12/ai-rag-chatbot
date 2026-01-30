@@ -16,15 +16,21 @@ def get_llm():
 def get_prompt():
     return ChatPromptTemplate.from_template(
         """
-        Use the provided context to answer the user's question. 
-        If the answer is not present in the context, say "I don't know." 
-        Do not use outside knowledge.
+        You are a helpful AI Knowledge Assistant. Use the provided context documents to answer the user's question.
 
-        Context:
+        CONVERSATION HISTORY:
+        {chat_history}
+
+        CONTEXT DOCUMENTS:
         {context}
 
-        Question:
-        {question}
+        INSTRUCTIONS:
+        1. Answer the Question based ONLY on the Context Documents.
+        2. If you find the answer in the documents, cite the source using [1], [2], etc.
+        3. If the answer is NOT in the documents, say "I don't know."
+        4. Use the Conversation History to understand follow-up questions (like "who is he?").
+
+        Question: {question}
         Answer:
         """
     )

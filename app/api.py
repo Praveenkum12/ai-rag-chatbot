@@ -20,6 +20,7 @@ class ChatRequest(BaseModel):
     doc_ids: Optional[List[str]] = []
     file_type: Optional[str] = None
     date_filter: Optional[str] = None # 'today', 'week', 'any'
+    history: Optional[List[dict]] = [] # [{"role": "user", "content": "..."}, ...]
 
 class SearchRequest(BaseModel):
     query: str
@@ -146,8 +147,11 @@ def chat(request: Request, chat_request: ChatRequest):
             search_kwargs={"k": 5, "filter": filters if filters else None}
         )
         
+        print(f"DEBUG: Active filters: {filters}")
+        
         # 2. Invoke retriever
         docs = retriever.invoke(chat_request.question)
+        print(f"DEBUG: Retrieved {len(docs)} docs for question: '{chat_request.question}'")
 
         # --- RELEVANCE FILTERING ---
         # Since EnsembleRetriever doesn't provide scores, we do a quick 
@@ -205,9 +209,21 @@ def chat(request: Request, chat_request: ChatRequest):
         
         context_text = "\n\n".join(context_parts)
         
+        # 5. Format History for the Prompt
+        history_text = ""
+        for msg in chat_request.history:
+            role = "HUMAN" if msg.get("role") == "user" else "AI"
+            history_text += f"{role}: {msg.get('content')}\n"
+
+        if not history_text:
+            history_text = "No previous conversation."
+
+        print(f"DEBUG: Context length: {len(context_text)}")
+        
         answer = answer_chain.invoke({
             "question": chat_request.question,
-            "context": context_text if context_text else "No information available."
+            "context": context_text if context_text else "No context documents found.",
+            "chat_history": history_text
         })
         
         # Hide sources if it's a greeting OR if the AI says "I don't know"
