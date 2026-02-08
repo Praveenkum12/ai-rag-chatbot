@@ -141,6 +141,25 @@
             <h2
               class="text-sm font-semibold uppercase tracking-wider text-slate-500"
             >
+              History
+            </h2>
+            <button
+              onclick="startNewChat()"
+              class="text-[10px] text-indigo-400 hover:text-indigo-300 transition-all font-medium uppercase tracking-tighter"
+            >
+              + New Chat
+            </button>
+          </div>
+          <div
+            id="conversationList"
+            class="space-y-2 mb-6 overflow-y-auto max-h-[200px] custom-scrollbar"
+          >
+            <!-- Conversations will be list here -->
+          </div>
+          <div class="flex items-center justify-between mb-4 mt-6">
+            <h2
+              class="text-sm font-semibold uppercase tracking-wider text-slate-500"
+            >
               Knowledge Base
             </h2>
             <button
@@ -378,6 +397,7 @@
       let activeFileType = "all";
       let activeDateFilter = "any";
       let chatHistory = []; // Our new memory box
+      let currentConversationId = null; // Track current session
 
       function clearSelection() {
         selectedDocIds = [];
@@ -489,10 +509,68 @@
           const res = await fetch("/documents");
           allFetchedDocs = await res.json();
           renderDocs();
+          fetchConversations(); // Also load chat history
           lucide.createIcons();
         } catch (e) {
           console.error("Failed to fetch docs", e);
         }
+      }
+
+      async function fetchConversations() {
+        try {
+          const res = await fetch("/conversations");
+          const convs = await res.json();
+          const list = document.getElementById("conversationList");
+          list.innerHTML = "";
+
+          if (convs.length === 0) {
+            list.innerHTML = `<p class="text-[10px] text-slate-500 text-center py-2">No past chats</p>`;
+            return;
+          }
+
+          convs.forEach((c) => {
+            const div = document.createElement("div");
+            div.className = `p-2 rounded-lg cursor-pointer transition-all border ${currentConversationId === c.id ? "bg-indigo-500/10 border-indigo-500/30" : "border-transparent hover:bg-white/5"}`;
+            div.onclick = () => loadConversation(c.id);
+            div.innerHTML = `
+              <div class="text-xs font-medium text-slate-200 truncate">${c.title}</div>
+              <div class="text-[9px] text-slate-500">${new Date(c.updated_at).toLocaleDateString()}</div>
+            `;
+            list.appendChild(div);
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      async function loadConversation(id) {
+        currentConversationId = id;
+        document.getElementById("chatContainer").innerHTML = "";
+
+        try {
+          const res = await fetch(`/conversations/${id}`);
+          chatHistory = await res.json();
+
+          chatHistory.forEach((msg) => {
+            appendMessage(msg.role === "user" ? "user" : "bot", msg.content);
+          });
+
+          fetchConversations(); // Update active highlight
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      function startNewChat() {
+        currentConversationId = null;
+        chatHistory = [];
+        document.getElementById("chatContainer").innerHTML = `
+          <div class="max-w-3xl mx-auto text-center mt-12 mb-8">
+            <h2 class="text-3xl font-bold mb-4 font-outfit">New Conversation</h2>
+            <p class="text-slate-400">Past chats are saved in your history.</p>
+          </div>
+        `;
+        fetchConversations();
       }
 
       async function deleteDoc(docId, fileName) {
@@ -624,15 +702,23 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               question,
+              conversation_id: currentConversationId,
               doc_ids: selectedDocIds,
               file_type: activeFileType,
               date_filter: activeDateFilter,
-              history: chatHistory, // Send the full history
+              history: chatHistory,
             }),
           });
 
           if (res.ok) {
             const data = await res.json();
+
+            // Set session ID if this was the first message
+            if (!currentConversationId) {
+              currentConversationId = data.conversation_id;
+              fetchConversations();
+            }
+
             updateBotMessage(botMsgId, data.answer, data.sources);
 
             // Update Token Display
@@ -691,8 +777,14 @@
 
       function appendMessage(role, text, id = null) {
         const container = document.getElementById("chatContainer");
+
+        // Remove existing loading message if switching/reloading
+        if (id && document.getElementById(id)) {
+          document.getElementById(id).remove();
+        }
+
         const div = document.createElement("div");
-        div.className = `flex ${role === "user" ? "justify-end" : "justify-start"} animate-fadeIn`;
+        div.className = `flex ${role === "user" ? "justify-end" : "justify-start"} animate-fadeIn w-full`;
         if (id) div.id = id;
 
         const inner = `

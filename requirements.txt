@@ -12,3 +12,5 @@ python-multipart
 rank_bm25
 langchain-classic
 tiktoken
+sqlalchemy
+pymysql

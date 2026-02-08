@@ -8,6 +8,10 @@ from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
 from app.rag.qa import get_qa_chain
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.models import Conversation, Message
+from fastapi import Depends
 
 router = APIRouter()
 
@@ -23,6 +27,7 @@ from datetime import datetime, timedelta
 
 class ChatRequest(BaseModel):
     question: str
+    conversation_id: Optional[str] = None # Added for session persistence
     doc_ids: Optional[List[str]] = []
     file_type: Optional[str] = None
     date_filter: Optional[str] = None # 'today', 'week', 'any'
@@ -133,8 +138,28 @@ async def list_documents(request: Request):
 
 
 @router.post("/chat")
-async def chat(request: Request, chat_request: ChatRequest):
+async def chat(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db)):
     try:
+        # 1. Handle Conversation Persistence
+        conv_id = chat_request.conversation_id
+        if not conv_id:
+            # Create new conversation if none provided
+            new_conv = Conversation(title=chat_request.question[:50] + "...")
+            db.add(new_conv)
+            db.commit()
+            db.refresh(new_conv)
+            conv_id = new_conv.id
+        
+        # Save User Message to DB
+        user_msg = Message(
+            conversation_id=conv_id,
+            role="user",
+            content=chat_request.question,
+            token_count=count_tokens(chat_request.question)
+        )
+        db.add(user_msg)
+        db.commit()
+
         # Construct filters for retrieval
         meta_filters = []
         
@@ -271,8 +296,19 @@ async def chat(request: Request, chat_request: ChatRequest):
         # Hide sources if it's a greeting OR if the AI says "I don't know"
         hide_sources = is_greeting or "i don't know" in answer.lower()
 
+        # Save AI Response to DB
+        ai_msg = Message(
+            conversation_id=conv_id,
+            role="assistant",
+            content=answer,
+            token_count=count_tokens(answer)
+        )
+        db.add(ai_msg)
+        db.commit()
+
         return {
             "answer": answer,
+            "conversation_id": conv_id, # Return the ID so frontend can persist session
             "sources": source_data if not hide_sources and docs else [],
             "token_usage": total_tokens,
             "new_summary": new_summary
@@ -370,6 +406,28 @@ async def clear_documents(request: Request):
         print(f"CRITICAL ERROR during clear: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
 
+
+@router.get("/conversations")
+async def list_conversations(db: Session = Depends(get_db)):
+    """Returns a list of all chat sessions for the current user."""
+    return db.query(Conversation).order_by(Conversation.updated_at.desc()).all()
+
+@router.get("/conversations/{conv_id}")
+async def get_conversation_history(conv_id: str, db: Session = Depends(get_db)):
+    """Returns the message history for a specific conversation ID."""
+    messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc()).all()
+    return [{
+        "role": msg.role,
+        "content": msg.content
+    } for msg in messages]
+
+@router.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str, db: Session = Depends(get_db)):
+    """Deletes a conversation and all its messages."""
+    db.query(Message).filter(Message.conversation_id == conv_id).delete()
+    db.query(Conversation).filter(Conversation.id == conv_id).delete()
+    db.commit()
+    return {"message": "Conversation deleted"}
 
 @router.get("/documents/inspect")
 async def inspect_chroma(request: Request, limit: int = 10):

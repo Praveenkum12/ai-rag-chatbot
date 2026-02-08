@@ -8,12 +8,22 @@ from app.api import router
 from contextlib import asynccontextmanager
 from app.rag.vectorstore import get_vectorstore
 from app.rag.qa import get_qa_chain
+from app.database import engine
+from app.models import Base
 import os
 
 # In main.py
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    print("Connecting to MySQL...")
+    try:
+        # Create tables inside lifespan to avoid Windows reload issues
+        Base.metadata.create_all(bind=engine)
+        print("Database tables verified.")
+    except Exception as e:
+        print(f"DATABASE ERROR: {e}")
+
     app.state.vectordb = get_vectorstore()
     app.state.qa_chain = get_qa_chain(app.state.vectordb)
     yield
