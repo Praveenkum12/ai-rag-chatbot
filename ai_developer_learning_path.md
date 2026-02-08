@@ -316,27 +316,27 @@ CREATE TABLE messages (
 
 ### Deliverables
 
-- [ ] Token counting system
-- [ ] Sliding window implementation
-- [ ] Conversation summarization
-- [ ] Database schema and session persistence
-- [ ] Conversation history UI
-- [ ] Long-term memory extraction (bonus)
+- [-] Token counting system
+- [-] Sliding window implementation
+- [-] Conversation summarization
+- [-] Database schema and session persistence
+- [-] Conversation history UI
+- [x] Long-term memory extraction (bonus)
 
 ### Testing Checklist
 
-- [ ] Have a 20+ turn conversation without errors
-- [ ] Verify bot remembers context from 10 messages ago
-- [ ] Close and reopen chat - history should persist
-- [ ] Check that token limits are respected
-- [ ] Test "start new conversation" feature
+- [-] Have a 20+ turn conversation without errors
+- [-] Verify bot remembers context from 10 messages ago
+- [-] Close and reopen chat - history should persist
+- [-] Check that token limits are respected
+- [-] Test "start new conversation" feature
 
 ### Bonus Challenges
 
-- Implement conversation search (find past conversations by topic)
-- Add conversation export (download as PDF or text)
-- Create conversation analytics (avg length, topics discussed)
-- Implement "remember this" command for explicit fact storage
+- [ ] Implement conversation search (find past conversations by topic)
+- [-] Add conversation export (download as PDF or text)
+- [ ] Create conversation analytics (avg length, topics discussed)
+- [ ] Implement "remember this" command for explicit fact storage
 
 ---
 

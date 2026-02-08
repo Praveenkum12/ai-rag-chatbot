@@ -1,4 +1,5 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Response
+from fastapi.responses import PlainTextResponse
 from typing import List, Optional
 from pathlib import Path
 import uuid
@@ -535,6 +536,42 @@ async def delete_conversation(conv_id: str, db: Session = Depends(get_db)):
     db.query(Conversation).filter(Conversation.id == conv_id).delete()
     db.commit()
     return {"message": "Conversation deleted"}
+
+@router.get("/conversations/{conv_id}/export")
+async def export_conversation(conv_id: str, db: Session = Depends(get_db)):
+    """Exports the conversation history as a text file."""
+    try:
+        print(f"DEBUG: Export requested for conversation: {conv_id}")
+        # Fetch the conversation title
+        conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+        if not conv:
+            print(f"DEBUG: Conversation {conv_id} not found in DB")
+            raise HTTPException(status_code=404, detail="Conversation not found")
+            
+        messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc()).all()
+        print(f"DEBUG: Found {len(messages)} messages for export")
+        
+        export_content = f"# Chat Export: {conv.title}\n"
+        export_content += f"Exported on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        export_content += "-" * 40 + "\n\n"
+        
+        for msg in messages:
+            role = "Human" if msg.role == "user" else "AI Assistant"
+            export_content += f"[{role}]:\n{msg.content}\n\n"
+            
+        filename = f"chat_export_{conv_id[:8]}.txt"
+        
+        return PlainTextResponse(
+            content=export_content,
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR: Export failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 @router.get("/documents/inspect")
 async def inspect_chroma(request: Request, limit: int = 10):

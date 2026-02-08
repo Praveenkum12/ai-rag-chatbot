@@ -47,7 +47,3 @@ async def read_index():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-@app.get("/WHO-ARE-YOU")
-def who_are_you():
-    return {"message": "I am the latest Antigravity-patched server!"}
