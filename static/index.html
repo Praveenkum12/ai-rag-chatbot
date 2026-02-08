@@ -644,7 +644,6 @@
 
               container.classList.remove("hidden");
               countText.textContent = `${data.token_usage} tokens`;
-              histText.textContent = `${chatHistory.length} msgs`;
 
               // Show warning if over 4000 tokens (assuming 8k limit)
               if (data.token_usage > 4000) {
@@ -661,6 +660,12 @@
             // Keep only the last 10 messages to save space
             if (chatHistory.length > 10) {
               chatHistory = chatHistory.slice(-10);
+            }
+
+            // Update history count UI with current memory size
+            const histText = document.getElementById("historyCount");
+            if (histText) {
+              histText.textContent = `${chatHistory.length} msgs`;
             }
           } else {
             updateBotMessage(

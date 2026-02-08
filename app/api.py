@@ -152,7 +152,8 @@ def chat(request: Request, chat_request: ChatRequest):
         from langchain_core.output_parsers import StrOutputParser
         
         # 0. Check if it's a greeting (Skip retrieval to save tokens)
-        is_greeting = chat_request.question.lower().strip().strip('?!.') in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon"]
+        clean_q = chat_request.question.lower().strip().strip('?!.')
+        is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
         
         if is_greeting:
             print("DEBUG: Greeting detected. Skipping document retrieval.")
@@ -224,7 +225,7 @@ def chat(request: Request, chat_request: ChatRequest):
         
         answer = answer_chain.invoke({
             "question": chat_request.question,
-            "context": context_text if context_text else "No context documents found.",
+            "context": context_text if context_text else ("Greeting! Please reply naturally." if is_greeting else "No context documents found."),
             "chat_history": history_text
         })
         
