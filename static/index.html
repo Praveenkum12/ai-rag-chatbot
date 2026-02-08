@@ -184,13 +184,35 @@
           </div>
         </div>
         <div class="mt-auto p-6 border-t border-white/5">
-          <div class="p-4 glass rounded-xl">
-            <p class="text-xs text-slate-400 mb-2">
+          <div class="p-4 glass rounded-xl space-y-2">
+            <p class="text-xs text-slate-400">
               Vector DB: <span class="text-indigo-400">Chroma</span>
             </p>
             <p class="text-xs text-slate-400">
               Model: <span class="text-purple-400">gpt-4.1-nano</span>
             </p>
+            <div
+              id="tokenUsageContainer"
+              class="pt-2 border-t border-white/5 hidden"
+            >
+              <p
+                class="text-[10px] uppercase text-slate-500 font-bold tracking-tighter mb-1"
+              >
+                Last Request Context
+              </p>
+              <div class="flex items-center justify-between">
+                <span
+                  id="tokenCount"
+                  class="text-xs font-mono font-bold text-indigo-400"
+                  >0 tokens</span
+                >
+                <span
+                  id="tokenWarning"
+                  class="hidden text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded animate-pulse"
+                  >NEAR LIMIT</span
+                >
+              </div>
+            </div>
           </div>
         </div>
       </aside>
@@ -601,6 +623,23 @@
           if (res.ok) {
             const data = await res.json();
             updateBotMessage(botMsgId, data.answer, data.sources);
+
+            // Update Token Display
+            if (data.token_usage) {
+              const container = document.getElementById("tokenUsageContainer");
+              const countText = document.getElementById("tokenCount");
+              const warning = document.getElementById("tokenWarning");
+
+              container.classList.remove("hidden");
+              countText.textContent = `${data.token_usage} tokens`;
+
+              // Show warning if over 4000 tokens (assuming 8k limit)
+              if (data.token_usage > 4000) {
+                warning.classList.remove("hidden");
+              } else {
+                warning.classList.add("hidden");
+              }
+            }
 
             // Add this turn to memory
             chatHistory.push({ role: "user", content: question });

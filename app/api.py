@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from typing import List, Optional
 from pathlib import Path
 import uuid
+import tiktoken
 
 from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
@@ -21,6 +22,15 @@ class ChatRequest(BaseModel):
     file_type: Optional[str] = None
     date_filter: Optional[str] = None # 'today', 'week', 'any'
     history: Optional[List[dict]] = [] # [{"role": "user", "content": "..."}, ...]
+
+def count_tokens(text: str, model: str = "gpt-4") -> int:
+    """Returns the number of tokens in a text string."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # Fallback to cl100k_base if model not found
+        encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
 
 class SearchRequest(BaseModel):
     query: str
@@ -153,21 +163,8 @@ def chat(request: Request, chat_request: ChatRequest):
         docs = retriever.invoke(chat_request.question)
         print(f"DEBUG: Retrieved {len(docs)} docs for question: '{chat_request.question}'")
 
-        # --- RELEVANCE FILTERING ---
-        # Since EnsembleRetriever doesn't provide scores, we do a quick 
-        # similarity check to see if THESE docs are actually relevant.
-        if docs:
-            # Check the best match's distance
-            # Lower distance = Higher relevance
-            test_search = request.app.state.vectordb.similarity_search_with_score(
-                chat_request.question, k=1, filter=filters if filters else None
-            )
-            if test_search:
-                best_doc, best_score = test_search[0]
-                # Relaxed threshold: High distance (> 1.1) means it's likely a total guess
-                if best_score > 1.1:
-                    print(f"DEBUG: Extremely low relevance detected (score {best_score:.4f}). Hiding sources.")
-                    docs = [] 
+        # --- RELEVANCE FILTERING REMOVED ---
+        # Passing all retrieved documents to the LLM regardless of relevance score as requested.
         # ---------------------------
 
         # 3. Check if it's a greeting
@@ -192,11 +189,10 @@ def chat(request: Request, chat_request: ChatRequest):
                 chat_request.question, k=10, filter=filters if filters else None
             )
         }
-
         for i, doc in enumerate(docs):
             filename = doc.metadata.get("filename", "Unknown File")
             clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
-            context_parts.append(f"--- Document: {filename} (Part {i+1}) ---\n{clean_content}")
+            context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
             
             # Calculate Percentage: 0.0 distance is 100%, 1.2+ is ~0%
             raw_score = scored_results.get(doc.page_content, 1.0)
@@ -229,9 +225,14 @@ def chat(request: Request, chat_request: ChatRequest):
         # Hide sources if it's a greeting OR if the AI says "I don't know"
         hide_sources = is_greeting or "i don't know" in answer.lower()
         
+        # 6. Calculate Tokens for tracking
+        total_tokens = count_tokens(chat_request.question) + count_tokens(context_text) + count_tokens(history_text)
+        print(f"DEBUG: Token usage for this request: {total_tokens}")
+
         return {
             "answer": answer,
-            "sources": source_data if not hide_sources and docs else []
+            "sources": source_data if not hide_sources and docs else [],
+            "token_usage": total_tokens
         }
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {str(e)}")
