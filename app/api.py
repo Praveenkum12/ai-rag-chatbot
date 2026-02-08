@@ -637,11 +637,12 @@ async def get_analytics(request: Request, db: Session = Depends(get_db)):
     
     avg_msgs = round(total_msgs / total_convs, 1) if total_convs > 0 else 0
     
-    # Get top 5 conversations by message count
+    # Get top 5 recent conversations (ordered by recency like history)
     from sqlalchemy import func
     top_chats = db.query(Conversation.title, func.count(Message.id).label('msg_count'))\
         .join(Message).filter(Conversation.user_id == user_id)\
-        .group_by(Conversation.id).order_by(func.count(Message.id).desc()).limit(5).all()
+        .group_by(Conversation.id, Conversation.updated_at)\
+        .order_by(Conversation.updated_at.desc()).limit(5).all()
 
     return {
         "total_conversations": total_convs,
