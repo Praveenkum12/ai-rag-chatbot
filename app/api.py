@@ -128,7 +128,7 @@ async def list_documents(request: Request):
 
 
 @router.post("/chat")
-def chat(request: Request, chat_request: ChatRequest):
+async def chat(request: Request, chat_request: ChatRequest):
     try:
         # Construct filters for retrieval
         meta_filters = []
@@ -245,7 +245,11 @@ def chat(request: Request, chat_request: ChatRequest):
         # Hide sources if it's a greeting OR if the AI says "I don't know"
         hide_sources = is_greeting or "i don't know" in answer.lower()
         
-        # 6. Sliding Window Logic
+        # 6. Calculate Tokens for tracking
+        total_tokens = count_tokens(chat_request.question) + count_tokens(context_text) + count_tokens(history_text)
+        print(f"DEBUG: Token usage for this request: {total_tokens}")
+
+        # 7. Sliding Window Logic
         # If tokens are high, suggest a summary for the next round
         new_summary = None
         if total_tokens > 2000 and len(chat_request.history) > 4:
