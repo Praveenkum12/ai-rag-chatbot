@@ -657,8 +657,19 @@
             chatHistory.push({ role: "user", content: question });
             chatHistory.push({ role: "assistant", content: data.answer });
 
-            // Keep only the last 10 messages to save space
-            if (chatHistory.length > 10) {
+            // SUMMARIZATION LOGIC (The Smart Sliding Window)
+            if (data.new_summary) {
+              console.log("Applying Summarization...");
+              // Keep only the summary and the very last 4 messages
+              const recentMessages = chatHistory.slice(-4);
+              chatHistory = [
+                {
+                  role: "assistant",
+                  content: "[SUMMARY OF PREVIOUS CHAT]: " + data.new_summary,
+                },
+                ...recentMessages,
+              ];
+            } else if (chatHistory.length > 10) {
               chatHistory = chatHistory.slice(-10);
             }
 

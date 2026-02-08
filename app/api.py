@@ -28,9 +28,22 @@ def count_tokens(text: str, model: str = "gpt-4") -> int:
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
-        # Fallback to cl100k_base if model not found
         encoding = tiktoken.get_encoding("cl100k_base")
     return len(encoding.encode(text))
+
+async def summarize_chat(history: List[dict]) -> str:
+    """Uses LLM to summarize a segment of chat history."""
+    from app.rag.qa import get_llm
+    llm = get_llm()
+    
+    text_to_summarize = ""
+    for msg in history:
+        text_to_summarize += f"{msg['role'].upper()}: {msg['content']}\n"
+        
+    prompt = f"Extract the key facts and decisions from the following conversation history into a concise bulleted list. Keep it informative but brief:\n\n{text_to_summarize}"
+    
+    summary = llm.invoke(prompt)
+    return summary.content
 
 class SearchRequest(BaseModel):
     query: str
@@ -232,14 +245,21 @@ def chat(request: Request, chat_request: ChatRequest):
         # Hide sources if it's a greeting OR if the AI says "I don't know"
         hide_sources = is_greeting or "i don't know" in answer.lower()
         
-        # 6. Calculate Tokens for tracking
-        total_tokens = count_tokens(chat_request.question) + count_tokens(context_text) + count_tokens(history_text)
-        print(f"DEBUG: Token usage for this request: {total_tokens}")
+        # 6. Sliding Window Logic
+        # If tokens are high, suggest a summary for the next round
+        new_summary = None
+        if total_tokens > 2000 and len(chat_request.history) > 4:
+            print("DEBUG: Tokens high! Preparing summary for the oldest context.")
+            # Summarize the first half of the history
+            to_summarize = chat_request.history[:-4] # Keep the last 4 messages as "short-term"
+            new_summary = await summarize_chat(to_summarize)
+            print(f"DEBUG: Generated Summary: {new_summary}")
 
         return {
             "answer": answer,
             "sources": source_data if not hide_sources and docs else [],
-            "token_usage": total_tokens
+            "token_usage": total_tokens,
+            "new_summary": new_summary
         }
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {str(e)}")
