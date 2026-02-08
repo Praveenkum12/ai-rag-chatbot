@@ -14,6 +14,11 @@ router = APIRouter()
 DATA_DIR = Path("data/documents")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Model configuration for token management
+MODEL_NAME = "gpt-4.1-nano" # or whatever model you use
+MODEL_TOKEN_LIMIT = 3000 # Example limit for older/local models
+SUMMARIZATION_THRESHOLD = int(MODEL_TOKEN_LIMIT * 0.75)
+
 from datetime import datetime, timedelta
 
 class ChatRequest(BaseModel):
@@ -23,7 +28,7 @@ class ChatRequest(BaseModel):
     date_filter: Optional[str] = None # 'today', 'week', 'any'
     history: Optional[List[dict]] = [] # [{"role": "user", "content": "..."}, ...]
 
-def count_tokens(text: str, model: str = "gpt-4") -> int:
+def count_tokens(text: str, model: str = "gpt-4.1-nano") -> int:
     """Returns the number of tokens in a text string."""
     try:
         encoding = tiktoken.encoding_for_model(model)
@@ -228,7 +233,13 @@ async def chat(request: Request, chat_request: ChatRequest):
         # 5. Format History for the Prompt
         history_text = ""
         for msg in chat_request.history:
-            role = "HUMAN" if msg.get("role") == "user" else "AI"
+            role_raw = msg.get("role", "user")
+            if role_raw == "system":
+                role = "SUMMARY"
+            elif role_raw == "user":
+                role = "HUMAN"
+            else:
+                role = "AI"
             history_text += f"{role}: {msg.get('content')}\n"
 
         if not history_text:
@@ -242,22 +253,23 @@ async def chat(request: Request, chat_request: ChatRequest):
             "chat_history": history_text
         })
         
-        # Hide sources if it's a greeting OR if the AI says "I don't know"
-        hide_sources = is_greeting or "i don't know" in answer.lower()
-        
         # 6. Calculate Tokens for tracking
         total_tokens = count_tokens(chat_request.question) + count_tokens(context_text) + count_tokens(history_text)
-        print(f"DEBUG: Token usage for this request: {total_tokens}")
+        print(f"DEBUG: Token usage for this request: {total_tokens} (Threshold: {SUMMARIZATION_THRESHOLD})")
 
-        # 7. Sliding Window Logic
-        # If tokens are high, suggest a summary for the next round
+        # 7. Sliding Window Logic (75% Rule)
+        # If tokens are high, summarize the older parts for the next turn
         new_summary = None
-        if total_tokens > 2000 and len(chat_request.history) > 4:
-            print("DEBUG: Tokens high! Preparing summary for the oldest context.")
-            # Summarize the first half of the history
-            to_summarize = chat_request.history[:-4] # Keep the last 4 messages as "short-term"
+        if total_tokens > SUMMARIZATION_THRESHOLD and len(chat_request.history) > 10:
+            print(f"DEBUG: Tokens exceeded 75% of limit ({total_tokens}/{MODEL_TOKEN_LIMIT}). Summarizing...")
+            
+            # Keep the last 10 messages as "fresh" context
+            to_summarize = chat_request.history[:-10] 
             new_summary = await summarize_chat(to_summarize)
-            print(f"DEBUG: Generated Summary: {new_summary}")
+            print(f"DEBUG: Generated Summary for older context: {new_summary}")
+
+        # Hide sources if it's a greeting OR if the AI says "I don't know"
+        hide_sources = is_greeting or "i don't know" in answer.lower()
 
         return {
             "answer": answer,

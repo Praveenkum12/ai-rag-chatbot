@@ -1,0 +1,13 @@
+{
+  "name": "ai-rag-chatbot-backend",
+  "version": "1.0.0",
+  "description": "Python FastAPI RAG Backend",
+  "main": "app/main.py",
+  "scripts": {
+    "dev": "uvicorn app.main:app --reload",
+    "start": "uvicorn app.main:app",
+    "install-python": "pip install -r requirements.txt"
+  },
+  "author": "",
+  "license": "ISC"
+}
