@@ -199,6 +199,16 @@
       >
         <!-- Conversations will be rendered here -->
       </div>
+
+      <div class="p-4 border-t border-white/10">
+        <button
+          onclick="clearHistory()"
+          class="w-full py-2.5 px-4 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
+        >
+          <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+          Clear All History
+        </button>
+      </div>
     </div>
 
     <main class="flex flex-1 overflow-hidden relative">
@@ -214,6 +224,17 @@
             >
               Knowledge Base
             </h2>
+            <button
+              id="clearSelectionBtn"
+              onclick="
+                selectedDocIds = [];
+                updateUI();
+              "
+              class="hidden p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all mr-1"
+              title="Clear Selection"
+            >
+              <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+            </button>
             <button
               onclick="toggleUpload()"
               class="p-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg transition-all"
@@ -554,25 +575,31 @@
       }
 
       function updateUI() {
-        document.querySelectorAll(".doc-item").forEach((item) => {
-          const docId = item.getAttribute("data-doc-id");
-          const badge = item.querySelector(".check-badge");
-          if (selectedDocIds.includes(docId)) {
-            item.classList.add("border-indigo-500/50", "bg-white/10");
-            item.classList.remove("border-transparent");
-            if (badge) badge.classList.remove("hidden");
-          } else {
-            item.classList.remove("border-indigo-500/50", "bg-white/10");
-            item.classList.add("border-transparent");
-            if (badge) badge.classList.add("hidden");
-          }
-        });
+        try {
+          document.querySelectorAll(".doc-item").forEach((item) => {
+            const docId = item.getAttribute("data-doc-id");
+            const badge = item.querySelector(".check-badge");
+            if (selectedDocIds.includes(docId)) {
+              item.classList.add("border-indigo-500/50", "bg-white/10");
+              item.classList.remove("border-transparent");
+              if (badge) badge.classList.remove("hidden");
+            } else {
+              item.classList.remove("border-indigo-500/50", "bg-white/10");
+              item.classList.add("border-transparent");
+              if (badge) badge.classList.add("hidden");
+            }
+          });
 
-        const clearBtn = document.getElementById("clearSelectionBtn");
-        if (selectedDocIds.length > 0) {
-          clearBtn.classList.remove("hidden");
-        } else {
-          clearBtn.classList.add("hidden");
+          const clearBtn = document.getElementById("clearSelectionBtn");
+          if (clearBtn) {
+            if (selectedDocIds.length > 0) {
+              clearBtn.classList.remove("hidden");
+            } else {
+              clearBtn.classList.add("hidden");
+            }
+          }
+        } catch (error) {
+          console.error("Error updating UI:", error);
         }
       }
 
@@ -680,11 +707,22 @@
 
           convs.forEach((c) => {
             const div = document.createElement("div");
-            div.className = `p-2 rounded-lg cursor-pointer transition-all border ${currentConversationId === c.id ? "bg-indigo-500/10 border-indigo-500/30" : "border-transparent hover:bg-white/5"}`;
+            div.className = `p-2.5 rounded-xl cursor-pointer transition-all border ${currentConversationId === c.id ? "bg-indigo-500/10 border-indigo-500/30" : "border-transparent hover:bg-white/5"}`;
             div.onclick = () => loadConversation(c.id);
+
+            const date = new Date(c.updated_at);
+            const dateStr = date.toLocaleDateString();
+            const timeStr = date.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+
             div.innerHTML = `
-              <div class="text-xs font-medium text-slate-200 truncate">${c.title}</div>
-              <div class="text-[9px] text-slate-500">${new Date(c.updated_at).toLocaleDateString()}</div>
+              <div class="text-xs font-medium text-slate-200 truncate mb-1">${c.title}</div>
+              <div class="flex items-center justify-between text-[10px] text-slate-500">
+                <span>${dateStr}</span>
+                <span>${timeStr}</span>
+              </div>
             `;
             list.appendChild(div);
           });
@@ -761,6 +799,30 @@
         } catch (err) {
           console.error("Delete error:", err);
           alert("Failed to delete document.");
+        }
+      }
+
+      async function clearHistory() {
+        if (
+          !confirm(
+            "Are you sure you want to delete your entire chat history? This cannot be undone.",
+          )
+        )
+          return;
+
+        try {
+          const res = await apiFetch("/clear-chat-history", {
+            method: "POST",
+          });
+          if (!res) return;
+
+          if (res.ok) {
+            startNewChat();
+          } else {
+            alert("Failed to clear history");
+          }
+        } catch (e) {
+          console.error(e);
         }
       }
 

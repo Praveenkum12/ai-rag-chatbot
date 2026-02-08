@@ -83,7 +83,9 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
             from app.auth import decode_access_token
             payload = decode_access_token(token)
             if payload:
-                user_id = payload.get("sub")
+                user_id = str(payload.get("sub"))
+        
+        print(f"DEBUG: Uploading document for User: {user_id}")
 
         doc_id = str(uuid.uuid4())
         file_path = DATA_DIR / f"{doc_id}{file_ext}"
@@ -133,7 +135,7 @@ async def list_documents(request: Request):
             from app.auth import decode_access_token
             payload = decode_access_token(token)
             if payload:
-                user_id = payload.get("sub")
+                user_id = str(payload.get("sub"))
         
         print(f"DEBUG: Listing documents for User ID: {user_id}")
 
@@ -150,15 +152,23 @@ async def list_documents(request: Request):
                 d_id = meta.get("doc_id")
                 fname = meta.get("filename", "Unknown")
                 ftype = meta.get("file_type", "txt")
+                p_at = meta.get("processed_at", "")
                 
                 if d_id and d_id not in unique_docs:
                     unique_docs[d_id] = {
                         "id": d_id,
                         "name": fname,
-                        "type": ftype
+                        "type": ftype,
+                        "processed_at": p_at
                     }
         
-        return list(unique_docs.values())
+        # Sort by processed_at descending (Most Recent First)
+        sorted_docs = sorted(
+            unique_docs.values(), 
+            key=lambda x: x.get("processed_at", ""), 
+            reverse=True
+        )
+        return sorted_docs
     except Exception as e:
         print(f"Error listing documents: {e}")
         return []
@@ -175,7 +185,8 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             from app.auth import decode_access_token
             payload = decode_access_token(token)
             if payload:
-                user_id = payload.get("sub")
+                user_id = str(payload.get("sub"))
+        print(f"DEBUG: Chat request from user_id: {user_id}")
 
         # 1. Handle Conversation Persistence
         conv_id = chat_request.conversation_id
@@ -403,7 +414,9 @@ async def delete_document(request: Request, doc_id: str):
             from app.auth import decode_access_token
             payload = decode_access_token(token)
             if payload:
-                user_id = payload.get("sub")
+                user_id = str(payload.get("sub"))
+        
+        print(f"DEBUG: Delete request from user_id: {user_id} for doc: {doc_id}")
 
         # 1. Delete from Chroma (with user_id filter for safety)
         request.app.state.vectordb.delete(where={"$and": [{"doc_id": doc_id}, {"user_id": user_id}]})
@@ -442,7 +455,9 @@ async def clear_documents(request: Request):
             from app.auth import decode_access_token
             payload = decode_access_token(token)
             if payload:
-                user_id = payload.get("sub")
+                user_id = str(payload.get("sub"))
+        
+        print(f"DEBUG: Clear request from user_id: {user_id}")
 
         # Clear just this user's data from Chroma
         request.app.state.vectordb.delete(where={"user_id": user_id})
@@ -468,9 +483,41 @@ async def list_conversations(request: Request, db: Session = Depends(get_db)):
         from app.auth import decode_access_token
         payload = decode_access_token(token)
         if payload:
-            user_id = payload.get("sub")
+            user_id = str(payload.get("sub"))
+    
+    print(f"DEBUG: List conversations for user_id: {user_id}")
 
     return db.query(Conversation).filter(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc()).all()
+
+@router.post("/clear-chat-history")
+async def clear_all_conversations(request: Request, db: Session = Depends(get_db)):
+    """Deletes all chat history for the current user."""
+    # Get User from Token
+    auth_header = request.headers.get("Authorization")
+    user_id = "guest"
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user_id = str(payload.get("sub"))
+    
+    print(f"DEBUG: ATTEMPTING TO CLEAR ALL HISTORY FOR USER: {user_id}")
+    
+    # Get all conversation IDs for this user
+    user_convs = db.query(Conversation.id).filter(Conversation.user_id == user_id).all()
+    conv_ids = [c[0] for c in user_convs]
+    
+    print(f"DEBUG: Found {len(conv_ids)} conversations to delete.")
+    
+    if conv_ids:
+        # Delete messages in batches or all together
+        db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(synchronize_session=False)
+        # Delete conversations
+        db.query(Conversation).filter(Conversation.user_id == user_id).delete(synchronize_session=False)
+        db.commit()
+    
+    return {"message": "All chat history cleared"}
 
 @router.get("/conversations/{conv_id}")
 async def get_conversation_history(conv_id: str, db: Session = Depends(get_db)):
