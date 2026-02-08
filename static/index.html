@@ -125,10 +125,23 @@
             <i data-lucide="history" class="w-5 h-5"></i>
             <span class="text-xs font-medium hidden md:inline">History</span>
           </button>
-          <div
-            class="w-2 h-2 bg-green-500 rounded-full animate-pulse mx-2"
-          ></div>
-          <span class="text-sm font-medium text-slate-400">System Ready</span>
+          <div class="h-6 w-[1px] bg-white/10 mx-2"></div>
+          <div class="flex flex-col items-end">
+            <span
+              id="displayUserName"
+              class="text-xs font-bold text-white leading-none mb-1"
+              >Guest User</span
+            >
+            <div class="flex items-center gap-2">
+              <div
+                class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"
+              ></div>
+              <span
+                class="text-[10px] font-medium text-slate-400 uppercase tracking-widest"
+                >System Ready</span
+              >
+            </div>
+          </div>
         </div>
         <button
           onclick="logout()"
@@ -150,7 +163,7 @@
     <!-- HISTORY DRAWER -->
     <div
       id="historyDrawer"
-      class="fixed top-0 left-0 h-screen w-80 glass z-50 transform -translate-x-full transition-transform duration-300 ease-out flex flex-col border-r border-white/10"
+      class="fixed top-0 right-0 h-screen w-80 glass z-50 transform translate-x-full transition-transform duration-300 ease-out flex flex-col border-l border-white/10"
     >
       <div
         class="p-6 border-b border-white/10 flex items-center justify-between"
@@ -432,11 +445,51 @@
     <script>
       // AUTH PROTECTION
       const token = localStorage.getItem("token");
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+
       if (!token) {
         window.location.href = "/static/login.html";
       }
 
+      async function fetchAllData() {
+        await fetchDocs();
+        await fetchConversations();
+      }
+
+      window.onload = async () => {
+        const display = document.getElementById("displayUserName");
+        if (user) {
+          display.textContent = user.name || user.email || "User";
+        } else {
+          display.textContent = "Guest User";
+        }
+        // Load initial data
+        await fetchAllData();
+
+        // Check for persisted conversation
+        const savedConvId = localStorage.getItem("activeConversationId");
+        if (savedConvId && savedConvId !== "null") {
+          await loadConversation(savedConvId);
+        } else {
+          startNewChat();
+        }
+      };
+
       function logout() {
+        // Clear UI containers immediately
+        const chat = document.getElementById("chatContainer");
+        const convs = document.getElementById("conversationList");
+        const docs = document.getElementById("docList");
+
+        if (chat) chat.innerHTML = "";
+        if (convs) convs.innerHTML = "";
+        if (docs) docs.innerHTML = "";
+
+        // Reset local state
+        chatHistory = [];
+        allFetchedDocs = [];
+        currentConversationId = null;
+
         localStorage.clear();
         window.location.href = "/static/login.html";
       }
@@ -444,18 +497,26 @@
       function toggleHistoryDrawer() {
         const drawer = document.getElementById("historyDrawer");
         const overlay = document.getElementById("drawerOverlay");
-        const isOpen = !drawer.classList.contains("-translate-x-full");
+        const isOpen = !drawer.classList.contains("translate-x-full");
 
         if (isOpen) {
-          drawer.classList.add("-translate-x-full");
-          overlay.classList.add("opacity-0");
-          setTimeout(() => overlay.classList.add("hidden"), 300);
+          closeHistoryDrawer();
         } else {
           overlay.classList.remove("hidden");
           setTimeout(() => {
-            drawer.classList.remove("-translate-x-full");
+            drawer.classList.remove("translate-x-full");
             overlay.classList.remove("opacity-0");
           }, 10);
+        }
+      }
+
+      function closeHistoryDrawer() {
+        const drawer = document.getElementById("historyDrawer");
+        const overlay = document.getElementById("drawerOverlay");
+        if (drawer) drawer.classList.add("translate-x-full");
+        if (overlay) {
+          overlay.classList.add("opacity-0");
+          setTimeout(() => overlay.classList.add("hidden"), 300);
         }
       }
 
@@ -598,7 +659,6 @@
           if (!res) return;
           allFetchedDocs = await res.json();
           renderDocs();
-          fetchConversations(); // Also load chat history
           lucide.createIcons();
         } catch (e) {
           console.error("Failed to fetch docs", e);
@@ -634,14 +694,26 @@
       }
 
       async function loadConversation(id) {
-        currentConversationId = id;
-        document.getElementById("chatContainer").innerHTML = "";
+        if (!id || id === "null") return;
 
         try {
           const res = await apiFetch(`/conversations/${id}`);
           if (!res) return;
-          chatHistory = await res.json();
 
+          if (!res.ok) {
+            console.error("Failed to load conversation:", id);
+            localStorage.removeItem("activeConversationId");
+            currentConversationId = null;
+            startNewChat();
+            return;
+          }
+
+          currentConversationId = id;
+          localStorage.setItem("activeConversationId", id);
+          document.getElementById("chatContainer").innerHTML = "";
+          closeHistoryDrawer();
+
+          chatHistory = await res.json();
           chatHistory.forEach((msg) => {
             appendMessage(msg.role === "user" ? "user" : "bot", msg.content);
           });
@@ -649,11 +721,14 @@
           fetchConversations(); // Update active highlight
         } catch (e) {
           console.error(e);
+          localStorage.removeItem("activeConversationId");
+          startNewChat();
         }
       }
 
       function startNewChat() {
         currentConversationId = null;
+        localStorage.removeItem("activeConversationId");
         chatHistory = [];
         document.getElementById("chatContainer").innerHTML = `
           <div class="max-w-3xl mx-auto text-center mt-12 mb-8">
@@ -688,8 +763,6 @@
           alert("Failed to delete document.");
         }
       }
-
-      fetchDocs();
 
       async function clearData() {
         if (
@@ -813,6 +886,10 @@
             // Set session ID if this was the first message
             if (!currentConversationId) {
               currentConversationId = data.conversation_id;
+              localStorage.setItem(
+                "activeConversationId",
+                currentConversationId,
+              );
               fetchConversations();
             }
 

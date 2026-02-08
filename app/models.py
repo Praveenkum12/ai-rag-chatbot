@@ -7,6 +7,7 @@ from datetime import datetime
 class User(Base):
     __tablename__ = "users"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    full_name = Column(String(255), nullable=True)
     email = Column(String(255), unique=True, index=True)
     hashed_password = Column(String(255))
     phone = Column(String(20), nullable=True)

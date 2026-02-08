@@ -10,6 +10,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
+    full_name: str = None
     phone: str = None
 
 class UserLogin(BaseModel):
@@ -26,6 +27,7 @@ async def register(user_in: UserCreate, db: Session = Depends(get_db)):
     # Create user
     new_user = User(
         email=user_in.email,
+        full_name=user_in.full_name,
         hashed_password=get_password_hash(user_in.password),
         phone=user_in.phone
     )
@@ -41,9 +43,9 @@ async def login(user_in: UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(user_in.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    access_token = create_access_token(data={"sub": user.id, "email": user.email})
+    access_token = create_access_token(data={"sub": user.id, "email": user.email, "name": user.full_name})
     return {
         "access_token": access_token, 
         "token_type": "bearer",
-        "user": {"email": user.email, "id": user.id}
+        "user": {"email": user.email, "id": user.id, "name": user.full_name}
     }

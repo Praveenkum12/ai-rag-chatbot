@@ -56,6 +56,25 @@
       </div>
 
       <form id="authForm" class="space-y-6">
+        <div id="nameGroup" class="hidden">
+          <label
+            class="text-xs font-semibold text-slate-500 uppercase tracking-widest ml-1 mb-2 block"
+            >Full Name</label
+          >
+          <div class="relative">
+            <i
+              data-lucide="user"
+              class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
+            ></i>
+            <input
+              type="text"
+              id="fullname"
+              class="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-12 pr-4 focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all placeholder:text-slate-600"
+              placeholder="John Doe"
+            />
+          </div>
+        </div>
+
         <div id="emailGroup">
           <label
             class="text-xs font-semibold text-slate-500 uppercase tracking-widest ml-1 mb-2 block"
@@ -142,6 +161,9 @@
     </div>
 
     <script>
+      // Clear any existing session data on entry
+      localStorage.clear();
+
       lucide.createIcons();
       let isSignUp = false;
 
@@ -168,6 +190,9 @@
         document
           .getElementById("phoneGroup")
           .classList.toggle("hidden", !isSignUp);
+        document
+          .getElementById("nameGroup")
+          .classList.toggle("hidden", !isSignUp);
         document.getElementById("errorMsg").classList.add("hidden");
       }
 
@@ -178,6 +203,7 @@
           const email = document.getElementById("email").value;
           const password = document.getElementById("password").value;
           const phone = document.getElementById("phone").value;
+          const full_name = document.getElementById("fullname").value;
           const errorMsg = document.getElementById("errorMsg");
           const btn = document.getElementById("submitBtn");
 
@@ -188,7 +214,7 @@
           try {
             const url = isSignUp ? "/auth/register" : "/auth/login";
             const body = isSignUp
-              ? { email, password, phone }
+              ? { email, password, phone, full_name }
               : { email, password };
 
             const res = await fetch(url, {
