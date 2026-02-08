@@ -9,9 +9,10 @@ from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
 from app.rag.qa import get_qa_chain
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, UserMemory
 from fastapi import Depends
 
 router = APIRouter()
@@ -194,14 +195,24 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
     try:
         # 0. Get User from Token (Optional for now, but good practice)
         auth_header = request.headers.get("Authorization")
-        user_id = None
+        user_id = "guest"  # Default to 'guest' if not authenticated
+        
+        print(f"DEBUG: Authorization header present: {bool(auth_header)}")
+        
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
+            print(f"DEBUG: Token extracted: {token[:20]}...")
+            
             from app.auth import decode_access_token
             payload = decode_access_token(token)
+            
+            print(f"DEBUG: Decoded payload: {payload}")
+            
             if payload:
                 user_id = str(payload.get("sub"))
-        print(f"DEBUG: Chat request from user_id: {user_id}")
+                print(f"DEBUG: Extracted user_id from token: {user_id}")
+        
+        print(f"DEBUG: Final user_id for this request: {user_id}")
 
         # 1. Handle Conversation Persistence
         conv_id = chat_request.conversation_id
@@ -228,6 +239,42 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         )
         db.add(user_msg)
         db.commit()
+
+        # 1.5. Check for "Remember This" command (flexible: with or without colon)
+        question_lower = chat_request.question.lower().strip()
+        print(f"DEBUG: Checking question: '{question_lower}'")
+        print(f"DEBUG: Starts with 'remember this'? {question_lower.startswith('remember this')}")
+        
+        if question_lower.startswith("remember this"):
+            print("DEBUG: Remember This command detected!")
+            # Extract fact - handle both "remember this:" and "remember this"
+            if ":" in chat_request.question:
+                fact = chat_request.question.split(":", 1)[1].strip()
+            else:
+                fact = chat_request.question[len("remember this"):].strip()
+            
+            print(f"DEBUG: Extracted fact: '{fact}'")
+            
+            if fact:
+                try:
+                    new_memory = UserMemory(user_id=user_id, fact=fact)
+                    db.add(new_memory)
+                    db.commit()
+                    print(f"DEBUG: Memory saved successfully for user {user_id}")
+                    return {
+                        "answer": f"✓ Got it! I'll remember: \"{fact}\"",
+                        "conversation_id": conv_id,
+                        "sources": [],
+                        "token_usage": 0
+                    }
+                except Exception as e:
+                    print(f"ERROR: Failed to save memory: {e}")
+                    return {
+                        "answer": f"Sorry, I couldn't save that memory. Error: {str(e)}",
+                        "conversation_id": conv_id,
+                        "sources": [],
+                        "token_usage": 0
+                    }
 
         # Construct filters for retrieval
         meta_filters = []
@@ -344,12 +391,17 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         if not history_text:
             history_text = "No previous conversation."
 
+        # 5.5 Fetch Long-Term Memories
+        memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).all() if user_id else []
+        memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "No previous memories stored."
+
         print(f"DEBUG: Context length: {len(context_text)}")
         
         answer = answer_chain.invoke({
             "question": chat_request.question,
             "context": context_text if context_text else ("Greeting! Please reply naturally." if is_greeting else "No context documents found."),
-            "chat_history": history_text
+            "chat_history": history_text,
+            "user_memories": memory_text
         })
         
         # 6. Calculate Tokens for tracking
@@ -506,6 +558,98 @@ async def list_conversations(request: Request, db: Session = Depends(get_db)):
     print(f"DEBUG: List conversations for user_id: {user_id}")
 
     return db.query(Conversation).filter(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc()).all()
+
+@router.get("/conversations-search")
+async def search_conversations(q: str, request: Request, db: Session = Depends(get_db)):
+    """Searches conversations by title or message content."""
+    auth_header = request.headers.get("Authorization")
+    user_id = "guest"
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user_id = str(payload.get("sub"))
+    
+    # Search in titles
+    conv_query = db.query(Conversation).filter(
+        Conversation.user_id == user_id,
+        Conversation.title.like(f"%{q}%")
+    )
+    
+    # Search in message contents
+    msg_query = db.query(Conversation).join(Message).filter(
+        Conversation.user_id == user_id,
+        Message.content.like(f"%{q}%")
+    )
+    
+    # Combine and deduplicate
+    results = conv_query.union(msg_query).order_by(Conversation.updated_at.desc()).all()
+    
+    return results
+
+@router.get("/memories")
+async def get_memories(request: Request, db: Session = Depends(get_db)):
+    """Returns all memories for the logged-in user."""
+    auth_header = request.headers.get("Authorization")
+    user_id = "guest"
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user_id = str(payload.get("sub"))
+            
+    return db.query(UserMemory).filter(UserMemory.user_id == user_id).all()
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str, request: Request, db: Session = Depends(get_db)):
+    """Deletes a specific memory."""
+    auth_header = request.headers.get("Authorization")
+    user_id = "guest"
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user_id = str(payload.get("sub"))
+            
+    db.query(UserMemory).filter(UserMemory.id == memory_id, UserMemory.user_id == user_id).delete()
+    db.commit()
+    return {"message": "Memory deleted"}
+
+@router.get("/analytics")
+async def get_analytics(request: Request, db: Session = Depends(get_db)):
+    """Calculates chat and memory statistics."""
+    auth_header = request.headers.get("Authorization")
+    user_id = "guest"
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user_id = str(payload.get("sub"))
+
+    # Stats calculation
+    total_convs = db.query(Conversation).filter(Conversation.user_id == user_id).count()
+    total_msgs = db.query(Message).join(Conversation).filter(Conversation.user_id == user_id).count()
+    total_memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).count()
+    
+    avg_msgs = round(total_msgs / total_convs, 1) if total_convs > 0 else 0
+    
+    # Get top 5 conversations by message count
+    from sqlalchemy import func
+    top_chats = db.query(Conversation.title, func.count(Message.id).label('msg_count'))\
+        .join(Message).filter(Conversation.user_id == user_id)\
+        .group_by(Conversation.id).order_by(func.count(Message.id).desc()).limit(5).all()
+
+    return {
+        "total_conversations": total_convs,
+        "total_messages": total_msgs,
+        "total_memories": total_memories,
+        "avg_messages_per_chat": avg_msgs,
+        "top_conversations": [{"title": c[0], "count": c[1]} for c in top_chats]
+    }
 
 @router.post("/clear-chat-history")
 async def clear_all_conversations(request: Request, db: Session = Depends(get_db)):

@@ -55,3 +55,9 @@ class Message(Base):
 #     PRIMARY KEY (id),
 #     FOREIGN KEY(conversation_id) REFERENCES conversations (id)
 # );
+class UserMemory(Base):
+    __tablename__ = "user_memories"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), nullable=True)  # No FK constraint to allow 'guest'
+    fact = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

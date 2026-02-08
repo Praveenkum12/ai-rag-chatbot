@@ -18,6 +18,9 @@ def get_prompt():
         """
         You are a helpful AI Knowledge Assistant. Use the provided context documents to answer the user's question.
 
+        LONG-TERM MEMORIES:
+        {user_memories}
+
         CONVERSATION HISTORY:
         {chat_history}
 

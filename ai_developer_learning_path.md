@@ -336,10 +336,10 @@ CREATE TABLE messages (
 
 ### Bonus Challenges
 
-- [ ] Implement conversation search (find past conversations by topic)
+- [] Implement conversation search (find past conversations by topic)
 - [-] Add conversation export (download as PDF or text)
-- [ ] Create conversation analytics (avg length, topics discussed)
-- [ ] Implement "remember this" command for explicit fact storage
+- [] Create conversation analytics (avg length, topics discussed)
+- [] Implement "remember this" command for explicit fact storage
 
 ---
 

@@ -115,6 +115,13 @@
         >
           <i data-lucide="trash-2" class="w-5 h-5"></i>
         </button>
+        <button
+          onclick="toggleAnalytics()"
+          class="p-2 glass rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-all flex items-center gap-2"
+          title="System Analytics"
+        >
+          <i data-lucide="bar-chart-2" class="w-5 h-5"></i>
+        </button>
         <div class="h-8 w-[1px] bg-white/10"></div>
         <div class="flex items-center gap-2">
           <button
@@ -191,6 +198,22 @@
           <i data-lucide="plus" class="w-4 h-4"></i>
           New Chat
         </button>
+      </div>
+
+      <div class="px-4 pb-4">
+        <div class="relative group">
+          <i
+            data-lucide="search"
+            class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors"
+          ></i>
+          <input
+            type="text"
+            id="historySearch"
+            oninput="handleHistorySearch(this.value)"
+            placeholder="Search conversations..."
+            class="w-full bg-white/5 border border-white/10 rounded-xl py-2 pl-10 pr-4 text-xs focus:ring-1 focus:ring-indigo-500 outline-none transition-all placeholder:text-slate-600"
+          />
+        </div>
       </div>
 
       <div
@@ -715,45 +738,6 @@
         }
       }
 
-      async function fetchConversations() {
-        try {
-          const res = await apiFetch("/conversations");
-          if (!res) return;
-          const convs = await res.json();
-          const list = document.getElementById("conversationList");
-          list.innerHTML = "";
-
-          if (convs.length === 0) {
-            list.innerHTML = `<p class="text-[10px] text-slate-500 text-center py-2">No past chats</p>`;
-            return;
-          }
-
-          convs.forEach((c) => {
-            const div = document.createElement("div");
-            div.className = `p-2.5 rounded-xl cursor-pointer transition-all border ${currentConversationId === c.id ? "bg-indigo-500/10 border-indigo-500/30" : "border-transparent hover:bg-white/5"}`;
-            div.onclick = () => loadConversation(c.id);
-
-            const date = new Date(c.updated_at);
-            const dateStr = date.toLocaleDateString();
-            const timeStr = date.toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            });
-
-            div.innerHTML = `
-              <div class="text-xs font-medium text-slate-200 truncate mb-1">${c.title}</div>
-              <div class="flex items-center justify-between text-[10px] text-slate-500">
-                <span>${dateStr}</span>
-                <span>${timeStr}</span>
-              </div>
-            `;
-            list.appendChild(div);
-          });
-        } catch (e) {
-          console.error(e);
-        }
-      }
-
       async function loadConversation(id) {
         if (!id || id === "null") return;
 
@@ -1161,6 +1145,150 @@
         } catch (e) {
           console.error(e);
           alert("Error exporting chat");
+        }
+      }
+
+      async function handleHistorySearch(q) {
+        if (!q || q.length < 2) {
+          fetchConversations();
+          return;
+        }
+
+        try {
+          const res = await apiFetch(
+            `/conversations-search?q=${encodeURIComponent(q)}`,
+          );
+          if (!res) return;
+          const convs = await res.json();
+          renderConversationList(convs);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      function renderConversationList(convs) {
+        const list = document.getElementById("conversationList");
+        list.innerHTML = "";
+
+        if (convs.length === 0) {
+          list.innerHTML = `<p class="text-[10px] text-slate-500 text-center py-4">No conversations found</p>`;
+          return;
+        }
+
+        convs.forEach((c) => {
+          const div = document.createElement("div");
+          div.className = `p-3 rounded-xl cursor-pointer transition-all border ${currentConversationId === c.id ? "bg-indigo-500/10 border-indigo-500/30" : "border-transparent hover:bg-white/5"}`;
+          div.onclick = () => loadConversation(c.id);
+
+          const date = new Date(c.updated_at);
+          const dateStr = date.toLocaleDateString();
+          const timeStr = date.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+
+          div.innerHTML = `
+            <div class="text-xs font-semibold text-slate-200 truncate mb-1">${c.title}</div>
+            <div class="flex items-center justify-between text-[9px] text-slate-500 font-medium uppercase tracking-wider">
+              <span>${dateStr}</span>
+              <span>${timeStr}</span>
+            </div>
+          `;
+          list.appendChild(div);
+        });
+        lucide.createIcons();
+      }
+
+      // Update fetchConversations to use cleaner render
+      async function fetchConversations() {
+        try {
+          const res = await apiFetch("/conversations");
+          if (!res) return;
+          const convs = await res.json();
+          renderConversationList(convs);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      async function toggleAnalytics() {
+        const modalId = "analyticsModal";
+        let modal = document.getElementById(modalId);
+
+        if (!modal) {
+          modal = document.createElement("div");
+          modal.id = modalId;
+          modal.className =
+            "fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4";
+          modal.onclick = () => modal.classList.add("hidden");
+          document.body.appendChild(modal);
+        }
+
+        if (!modal.classList.contains("hidden")) {
+          modal.classList.add("hidden");
+          return;
+        }
+
+        try {
+          modal.innerHTML = `
+            <div class="glass w-full max-w-lg rounded-3xl p-8 animate-fadeIn" onclick="event.stopPropagation()">
+               <div class="flex justify-between items-center mb-8">
+                  <h3 class="text-2xl font-bold font-outfit">Chat Insights</h3>
+                  <button onclick="document.getElementById('analyticsModal').classList.add('hidden')" class="text-slate-400 hover:text-white">
+                    <i data-lucide="x"></i>
+                  </button>
+               </div>
+               <div class="grid grid-cols-2 gap-4 mb-8">
+                  <div class="p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <div class="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Total Chats</div>
+                    <div id="stat-chats" class="text-3xl font-bold text-indigo-400">...</div>
+                  </div>
+                  <div class="p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <div class="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Avg Length</div>
+                    <div id="stat-avg" class="text-3xl font-bold text-purple-400">...</div>
+                  </div>
+                  <div class="p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <div class="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Total Msgs</div>
+                    <div id="stat-msgs" class="text-3xl font-bold text-indigo-400">...</div>
+                  </div>
+                  <div class="p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <div class="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Facts Known</div>
+                    <div id="stat-memories" class="text-3xl font-bold text-green-400">...</div>
+                  </div>
+               </div>
+               <h4 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Top Conversations</h4>
+               <div id="top-convs" class="space-y-2"></div>
+            </div>
+          `;
+          lucide.createIcons();
+          modal.classList.remove("hidden");
+
+          const res = await apiFetch("/analytics");
+          if (!res) return;
+          const data = await res.json();
+
+          document.getElementById("stat-chats").textContent =
+            data.total_conversations;
+          document.getElementById("stat-msgs").textContent =
+            data.total_messages;
+          document.getElementById("stat-memories").textContent =
+            data.total_memories;
+          document.getElementById("stat-avg").textContent =
+            data.avg_messages_per_chat;
+
+          const topList = document.getElementById("top-convs");
+          data.top_conversations.forEach((c) => {
+            const row = document.createElement("div");
+            row.className =
+              "flex justify-between items-center p-3 bg-white/5 rounded-xl text-xs";
+            row.innerHTML = `
+                <span class="text-slate-300 truncate w-48">${c.title}</span>
+                <span class="font-bold text-indigo-400">${c.count} msgs</span>
+             `;
+            topList.appendChild(row);
+          });
+        } catch (e) {
+          console.error(e);
         }
       }
     </script>
