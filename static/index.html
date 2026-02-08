@@ -198,17 +198,28 @@
               <p
                 class="text-[10px] uppercase text-slate-500 font-bold tracking-tighter mb-1"
               >
-                Last Request Context
+                Request Stats
               </p>
-              <div class="flex items-center justify-between">
-                <span
-                  id="tokenCount"
-                  class="text-xs font-mono font-bold text-indigo-400"
-                  >0 tokens</span
-                >
+              <div class="flex flex-col gap-1">
+                <div class="flex items-center justify-between">
+                  <span class="text-[9px] text-slate-500">Context:</span>
+                  <span
+                    id="tokenCount"
+                    class="text-xs font-mono font-bold text-indigo-400"
+                    >0 tokens</span
+                  >
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-[9px] text-slate-500">History:</span>
+                  <span
+                    id="historyCount"
+                    class="text-xs font-mono font-bold text-purple-400"
+                    >0 msgs</span
+                  >
+                </div>
                 <span
                   id="tokenWarning"
-                  class="hidden text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded animate-pulse"
+                  class="hidden text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded animate-pulse text-center mt-1"
                   >NEAR LIMIT</span
                 >
               </div>
@@ -628,10 +639,12 @@
             if (data.token_usage) {
               const container = document.getElementById("tokenUsageContainer");
               const countText = document.getElementById("tokenCount");
+              const histText = document.getElementById("historyCount");
               const warning = document.getElementById("tokenWarning");
 
               container.classList.remove("hidden");
               countText.textContent = `${data.token_usage} tokens`;
+              histText.textContent = `${chatHistory.length} msgs`;
 
               // Show warning if over 4000 tokens (assuming 8k limit)
               if (data.token_usage > 4000) {

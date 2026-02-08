@@ -151,24 +151,30 @@ def chat(request: Request, chat_request: ChatRequest):
         from app.rag.qa import get_hybrid_retriever, get_llm, get_prompt
         from langchain_core.output_parsers import StrOutputParser
         
-        # 1. Get Hybrid Retriever
-        retriever = get_hybrid_retriever(
-            request.app.state.vectordb, 
-            search_kwargs={"k": 5, "filter": filters if filters else None}
-        )
+        # 0. Check if it's a greeting (Skip retrieval to save tokens)
+        is_greeting = chat_request.question.lower().strip().strip('?!.') in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon"]
         
-        print(f"DEBUG: Active filters: {filters}")
-        
-        # 2. Invoke retriever
-        docs = retriever.invoke(chat_request.question)
-        print(f"DEBUG: Retrieved {len(docs)} docs for question: '{chat_request.question}'")
+        if is_greeting:
+            print("DEBUG: Greeting detected. Skipping document retrieval.")
+            docs = []
+            filters = None
+        else:
+            # 1. Get Hybrid Retriever
+            # Optimized: Reducing k from 5 to 3 to save tokens/cost (3+3 = max 6 docs)
+            retriever = get_hybrid_retriever(
+                request.app.state.vectordb, 
+                search_kwargs={"k": 3, "filter": filters if filters else None}
+            )
+            
+            print(f"DEBUG: Active filters: {filters}")
+            
+            # 2. Invoke retriever
+            docs = retriever.invoke(chat_request.question)
+            print(f"DEBUG: Retrieved {len(docs)} docs for question: '{chat_request.question}'")
 
         # --- RELEVANCE FILTERING REMOVED ---
         # Passing all retrieved documents to the LLM regardless of relevance score as requested.
         # ---------------------------
-
-        # 3. Check if it's a greeting
-        is_greeting = chat_request.question.lower() in ["hi", "hello", "hey", "greetings"]
         
         # 4. Run LLM
         llm = get_llm()
