@@ -140,11 +140,24 @@ async def list_documents(request: Request):
 @router.post("/chat")
 async def chat(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db)):
     try:
+        # 0. Get User from Token (Optional for now, but good practice)
+        auth_header = request.headers.get("Authorization")
+        user_id = None
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            from app.auth import decode_access_token
+            payload = decode_access_token(token)
+            if payload:
+                user_id = payload.get("sub")
+
         # 1. Handle Conversation Persistence
         conv_id = chat_request.conversation_id
         if not conv_id:
             # Create new conversation if none provided
-            new_conv = Conversation(title=chat_request.question[:50] + "...")
+            new_conv = Conversation(
+                title=chat_request.question[:50] + "...",
+                user_id=user_id # LINKED TO LOGGED IN USER
+            )
             db.add(new_conv)
             db.commit()
             db.refresh(new_conv)

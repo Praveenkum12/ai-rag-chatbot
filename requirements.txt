@@ -14,3 +14,4 @@ langchain-classic
 tiktoken
 sqlalchemy
 pymysql
+email-validator

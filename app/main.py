@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown (cleanup if needed)
 
+from app.auth_api import router as auth_router
+
 app = FastAPI(title="LangChain RAG", lifespan=lifespan)
 
 # Create static directory if it doesn't exist
@@ -36,6 +38,7 @@ os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(router)
+app.include_router(auth_router)
 
 @app.get("/")
 async def read_index():
