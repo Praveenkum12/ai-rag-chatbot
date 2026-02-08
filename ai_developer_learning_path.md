@@ -318,9 +318,12 @@ CREATE TABLE messages (
 
 - [-] Token counting system
 - [-] Sliding window implementation
-- [-] Conversation summarization
-- [-] Database schema and session persistence
-- [-] Conversation history UI
+- [x] Basic Conversation History (Database)
+- [x] Session persistence (Stay in chat after refresh)
+- [x] Token counting & sliding window logic
+- [x] Conversation summarization
+- [x] Multimodal context (History + Retrieval)
+- [x] AI-generated conversation titles
 - [x] Long-term memory extraction (bonus)
 
 ### Testing Checklist

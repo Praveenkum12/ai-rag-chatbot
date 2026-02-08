@@ -56,6 +56,20 @@ async def summarize_chat(history: List[dict]) -> str:
     summary = llm.invoke(prompt)
     return summary.content
 
+async def generate_title(first_question: str) -> str:
+    """Uses LLM to generate a short, descriptive title for the conversation."""
+    try:
+        from app.rag.qa import get_llm
+        llm = get_llm()
+        
+        prompt = f"Generate a very short (max 4-5 words) descriptive title for a conversation starting with this question: '{first_question}'. Respond ONLY with the title text. No quotes, no prefix like 'Title:', no period."
+        
+        response = llm.invoke(prompt)
+        return response.content.strip().replace('"', '')
+    except Exception as e:
+        print(f"DEBUG: Title generation failed: {e}")
+        return first_question[:40] + "..."
+
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
@@ -192,9 +206,12 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         # 1. Handle Conversation Persistence
         conv_id = chat_request.conversation_id
         if not conv_id:
+            # Generate a smart title using LLM
+            smart_title = await generate_title(chat_request.question)
+            
             # Create new conversation if none provided
             new_conv = Conversation(
-                title=chat_request.question[:50] + "...",
+                title=smart_title,
                 user_id=user_id # LINKED TO LOGGED IN USER
             )
             db.add(new_conv)
