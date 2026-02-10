@@ -447,6 +447,193 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         }
 
 
+@router.post("/chat-with-tools")
+async def chat_with_tools(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Enhanced chat endpoint with OpenAI function calling support.
+    Combines RAG retrieval with tool execution (e.g., weather API).
+    """
+    try:
+        from openai import OpenAI
+        from app.tools import AVAILABLE_TOOLS, execute_function
+        import json
+        
+        # Get user authentication
+        auth_header = request.headers.get("Authorization")
+        user_id = "guest"
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            from app.auth import decode_access_token
+            payload = decode_access_token(token)
+            if payload:
+                user_id = str(payload.get("sub"))
+        
+        print(f"DEBUG: Function calling chat for user: {user_id}")
+        
+        # Handle conversation persistence
+        conv_id = chat_request.conversation_id
+        if not conv_id:
+            smart_title = await generate_title(chat_request.question)
+            new_conv = Conversation(title=smart_title, user_id=user_id)
+            db.add(new_conv)
+            db.commit()
+            db.refresh(new_conv)
+            conv_id = new_conv.id
+        
+        # Save user message
+        user_msg = Message(
+            conversation_id=conv_id,
+            role="user",
+            content=chat_request.question,
+            token_count=count_tokens(chat_request.question)
+        )
+        db.add(user_msg)
+        db.commit()
+        
+        # Check if RAG context is needed (not for simple tool calls like weather)
+        needs_rag = not any(keyword in chat_request.question.lower() 
+                           for keyword in ['weather', 'temperature', 'forecast'])
+        
+        context_text = ""
+        source_data = []
+        
+        if needs_rag:
+            # Perform RAG retrieval
+            filters = None
+            if chat_request.doc_ids:
+                filters = {"filename": {"$in": chat_request.doc_ids}}
+            elif chat_request.file_type:
+                filters = {"file_type": chat_request.file_type}
+            
+            docs = request.app.state.vectordb.similarity_search(
+                chat_request.question, 
+                k=5, 
+                filter=filters
+            )
+            
+            if docs:
+                context_parts = []
+                for i, doc in enumerate(docs):
+                    filename = doc.metadata.get("filename", "Unknown File")
+                    clean_content = doc.page_content.replace("\\x00", "")
+                    context_parts.append(f"[Source {i+1}]: From {filename}\\n{clean_content}")
+                    source_data.append({
+                        "content": doc.page_content,
+                        "metadata": doc.metadata
+                    })
+                context_text = "\\n\\n".join(context_parts)
+        
+        # Build message history for OpenAI
+        messages = [
+            {
+                "role": "system", 
+                "content": f"""You are a helpful AI assistant with access to real-time tools and a knowledge base.
+
+When answering questions:
+1. Use the available tools when appropriate (e.g., get_weather for weather queries)
+2. Use the provided context from documents when available
+3. Combine both sources intelligently to give comprehensive answers
+
+{f"Context from knowledge base:\\n{context_text}" if context_text else ""}"""
+            }
+        ]
+        
+        # Add conversation history
+        for msg in chat_request.history:
+            messages.append({
+                "role": msg.get("role"),
+                "content": msg.get("content")
+            })
+        
+        # Add current question
+        messages.append({
+            "role": "user",
+            "content": chat_request.question
+        })
+        
+        # Initialize OpenAI client
+        client = OpenAI()
+        
+        # First API call with tools
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            tools=AVAILABLE_TOOLS,
+            tool_choice="auto"
+        )
+        
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
+        
+        # Track tool usage
+        tools_used = []
+        
+        # Check if the model wants to call a function
+        if tool_calls:
+            print(f"DEBUG: Model requested {len(tool_calls)} tool call(s)")
+            
+            # Add the assistant's response to messages
+            messages.append(response_message)
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+                
+                print(f"DEBUG: Calling {function_name} with args: {function_args}")
+                tools_used.append({"name": function_name, "args": function_args})
+                
+                # Execute the function
+                function_response = await execute_function(function_name, function_args)
+                
+                # Add function response to messages
+                messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response
+                })
+            
+            # Second API call to get the final response
+            second_response = client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=messages
+            )
+            
+            final_answer = second_response.choices[0].message.content
+        else:
+            # No tool calls needed, use the direct response
+            final_answer = response_message.content
+        
+        # Save AI response
+        ai_msg = Message(
+            conversation_id=conv_id,
+            role="assistant",
+            content=final_answer,
+            token_count=count_tokens(final_answer)
+        )
+        db.add(ai_msg)
+        db.commit()
+        
+        return {
+            "answer": final_answer,
+            "conversation_id": conv_id,
+            "sources": source_data,
+            "token_usage": response.usage.total_tokens,
+            "tools_used": tools_used
+        }
+        
+    except Exception as e:
+        print(f"CRITICAL FUNCTION CALLING ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "answer": f"Sorry, I encountered an error: {str(e)}",
+            "sources": [],
+            "conversation_id": conv_id if 'conv_id' in locals() else None
+        }
+
+
 @router.post("/search")
 def search(request: Request, search_request: SearchRequest):
     filter_dict = None

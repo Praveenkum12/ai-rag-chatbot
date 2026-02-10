@@ -14,4 +14,7 @@ langchain-classic
 tiktoken
 sqlalchemy
 pymysql
-email-validatorpython-jose[cryptography]
+email-validator
+python-jose[cryptography]
+httpx
+openai
