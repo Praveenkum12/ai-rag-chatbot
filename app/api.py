@@ -345,9 +345,13 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         # Passing all retrieved documents to the LLM regardless of relevance score as requested.
         # ---------------------------
         
-        # Early return if no documents and not a greeting/special command
-        if not is_greeting and len(docs) == 0 and not context_text:
-            print("DEBUG: No documents retrieved and not a greeting. Returning 'I don't know.'")
+        # Early return if no documents and not a greeting/special command/tool-friendly query
+        # We allow the LLM to proceed if the question mentions weather, time, or location
+        tool_keywords = ["weather", "time", "date", "today", "now", "where am i", "location", "place"]
+        is_tool_query = any(word in clean_q for word in tool_keywords)
+        
+        if not is_greeting and not is_tool_query and len(docs) == 0 and not context_text:
+            print("DEBUG: No documents retrieved, not a greeting, and not a tool query. Returning 'I don't know.'")
             
             # Save AI Response to DB
             ai_msg = Message(
@@ -432,15 +436,19 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         messages = [
             {
                 "role": "system",
-                "content": f"""You are a RAG (Retrieval-Augmented Generation) assistant. You ONLY answer questions based on the uploaded documents in the knowledge base.
+                "content": f"""You are a RAG (Retrieval-Augmented Generation) assistant.
 
-STRICT RULES:
-1. **ONLY use information from the "Context from knowledge base" section below**
-2. **DO NOT use your general training knowledge** - If the answer isn't in the uploaded documents, say "I don't know."
-3. **For greetings** (hi, hello) → Respond briefly and friendly
-4. **For weather queries** → Use the get_weather tool
-5. **For "remember this"** → Acknowledge you'll remember it
-6. **For any other question** → ONLY answer if the information exists in the context below
+PRIMARY DIRECTIVE:
+1. **TOOLS FIRST**: If the user asks about weather, current time, or their location, ALWAYS use the relevant tool immediately. This takes precedence over document searching.
+2. **STRICT KNOWLEDGE BASE**: For any other factual questions, ONLY use information from the "Context from knowledge base" section. If the answer isn't there, say "I don't know."
+3. **DO NOT** use your general training knowledge for factual questions about people, places, or things unless a tool provides the data.
+
+SPECIFIC RULES:
+- **Weather** → Use `get_weather`. It can handle cities (Tokyo) or countries (India).
+- **Time/Date** → Use `get_datetime`.
+- **Location** → Use `get_user_location`.
+- **Greetings** → Respond briefly and friendly.
+- **"Remember this"** → Confirm you'll remember it in the database.
 
 Context from knowledge base:
 {context_text if context_text else "No documents available"}
@@ -451,7 +459,7 @@ Chat History:
 User Memories:
 {memory_text}
 
-REMEMBER: If the answer is not in the uploaded documents above, you MUST respond with "I don't know." Do not make up answers or use external knowledge."""
+REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is not in the documents above, you MUST say "I don't know." """
             }
         ]
         

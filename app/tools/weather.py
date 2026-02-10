@@ -86,8 +86,10 @@ async def get_weather(location: str = None, lat: float = None, lon: float = None
         if lat is not None and lon is not None:
             params["lat"] = lat
             params["lon"] = lon
+            print(f"DEBUG: Fetching weather for coordinates: {lat}, {lon}")
         elif location:
             params["q"] = location
+            print(f"DEBUG: Fetching weather for location: {location}")
         else:
             return '{"error": "Please provide either a city name or coordinates (lat/lon)."}'
 
@@ -97,6 +99,10 @@ async def get_weather(location: str = None, lat: float = None, lon: float = None
                 params=params,
                 timeout=10.0
             )
+            
+            if response.status_code == 404:
+                return f'{{"error": "The location \'{location}\' was not found. Try a more specific city like \'New Delhi, India\' or \'Mumbai\'."}}'
+                
             response.raise_for_status()
             data = response.json()
             
@@ -115,4 +121,5 @@ async def get_weather(location: str = None, lat: float = None, lon: float = None
             return json.dumps(weather_info)
             
     except Exception as e:
-        return f'{{"error": "Weather failed: {str(e)}"}}'
+        print(f"ERROR in get_weather: {str(e)}")
+        return f'{{"error": "Weather service failed: {str(e)}"}}'
