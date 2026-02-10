@@ -1056,19 +1056,31 @@
           sourcesDiv.innerHTML =
             '<span class="text-[10px] text-slate-500 w-full mb-1">Citations:</span>';
           sources.forEach((src, idx) => {
+            const isTool = src.metadata.type === "tool";
             const conf = src.metadata.confidence || 0;
-            const color =
-              conf > 80
-                ? "text-green-400 border-green-500/30 bg-green-500/5 hover:bg-green-500/10"
-                : conf > 40
-                  ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10"
-                  : "text-red-400 border-red-500/30 bg-red-500/5 hover:bg-red-500/10";
+
+            let color = "";
+            if (isTool) {
+              color =
+                "text-indigo-400 border-indigo-500/30 bg-indigo-500/5 hover:bg-indigo-500/10";
+            } else {
+              color =
+                conf > 80
+                  ? "text-green-400 border-green-500/30 bg-green-500/5 hover:bg-green-500/10"
+                  : conf > 40
+                    ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10"
+                    : "text-red-400 border-red-500/30 bg-red-500/5 hover:bg-red-500/10";
+            }
+
+            const label = isTool
+              ? src.metadata.filename
+              : `Source [${idx + 1}]`;
 
             const btn = document.createElement("button");
             btn.className = `px-3 py-1.5 border rounded-full text-xs flex items-center gap-2 transition-all ${color}`;
             btn.innerHTML = `
-              <span>Source [${idx + 1}]</span>
-              <span class="opacity-60 font-mono text-[10px]">${conf}%</span>
+              <span>${label}</span>
+              ${!isTool ? `<span class="opacity-60 font-mono text-[10px]">${conf}%</span>` : ""}
             `;
             btn.onclick = () => showSource(src.content, src.metadata, idx + 1);
             sourcesDiv.appendChild(btn);

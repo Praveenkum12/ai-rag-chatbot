@@ -284,12 +284,16 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         meta_filters.append({"user_id": {"$eq": current_identity}})
         print(f"DEBUG: Chatting as {current_identity}")
 
-        # 1. Doc IDs filter
-        if chat_request.doc_ids:
+        # 1. Doc IDs filter (only if specific documents are selected)
+        if chat_request.doc_ids and len(chat_request.doc_ids) > 0:
             if len(chat_request.doc_ids) == 1:
                 meta_filters.append({"doc_id": {"$eq": chat_request.doc_ids[0]}})
             else:
                 meta_filters.append({"doc_id": {"$in": chat_request.doc_ids}})
+            print(f"DEBUG: Filtering to specific documents: {chat_request.doc_ids}")
+        else:
+            print(f"DEBUG: No specific documents selected - searching ALL user documents")
+        
         
         # 2. File Type filter
         if chat_request.file_type and chat_request.file_type != "all":
@@ -340,6 +344,28 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         # --- RELEVANCE FILTERING REMOVED ---
         # Passing all retrieved documents to the LLM regardless of relevance score as requested.
         # ---------------------------
+        
+        # Early return if no documents and not a greeting/special command
+        if not is_greeting and len(docs) == 0 and not context_text:
+            print("DEBUG: No documents retrieved and not a greeting. Returning 'I don't know.'")
+            
+            # Save AI Response to DB
+            ai_msg = Message(
+                conversation_id=conv_id,
+                role="assistant",
+                content="I don't know.",
+                token_count=count_tokens("I don't know.")
+            )
+            db.add(ai_msg)
+            db.commit()
+            
+            return {
+                "answer": "I don't know.",
+                "conversation_id": conv_id,
+                "sources": [],
+                "token_usage": 0,
+                "tools_used": []
+            }
         
         # 4. Run LLM
         llm = get_llm()
@@ -397,153 +423,37 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
 
         print(f"DEBUG: Context length: {len(context_text)}")
         
-        answer = answer_chain.invoke({
-            "question": chat_request.question,
-            "context": context_text if context_text else ("Greeting! Please reply naturally." if is_greeting else "No context documents found."),
-            "chat_history": history_text,
-            "user_memories": memory_text
-        })
-        
-        # 6. Calculate Tokens for tracking
-        total_tokens = count_tokens(chat_request.question) + count_tokens(context_text) + count_tokens(history_text)
-        print(f"DEBUG: Token usage for this request: {total_tokens} (Threshold: {SUMMARIZATION_THRESHOLD})")
-
-        # 7. Sliding Window Logic (75% Rule)
-        # If tokens are high, summarize the older parts for the next turn
-        new_summary = None
-        if total_tokens > SUMMARIZATION_THRESHOLD and len(chat_request.history) > 10:
-            print(f"DEBUG: Tokens exceeded 75% of limit ({total_tokens}/{MODEL_TOKEN_LIMIT}). Summarizing...")
-            
-            # Keep the last 10 messages as "fresh" context
-            to_summarize = chat_request.history[:-10] 
-            new_summary = await summarize_chat(to_summarize)
-            print(f"DEBUG: Generated Summary for older context: {new_summary}")
-
-        # Hide sources if it's a greeting OR if the AI says "I don't know"
-        hide_sources = is_greeting or "i don't know" in answer.lower()
-
-        # Save AI Response to DB
-        ai_msg = Message(
-            conversation_id=conv_id,
-            role="assistant",
-            content=answer,
-            token_count=count_tokens(answer)
-        )
-        db.add(ai_msg)
-        db.commit()
-
-        return {
-            "answer": answer,
-            "conversation_id": conv_id, # Return the ID so frontend can persist session
-            "sources": source_data if not hide_sources and docs else [],
-            "token_usage": total_tokens,
-            "new_summary": new_summary
-        }
-    except Exception as e:
-        print(f"CRITICAL CHAT ERROR: {str(e)}")
-        return {
-            "answer": "I don't know.",
-            "sources": []
-        }
-
-
-@router.post("/chat-with-tools")
-async def chat_with_tools(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db)):
-    """
-    Enhanced chat endpoint with OpenAI function calling support.
-    Combines RAG retrieval with tool execution (e.g., weather API).
-    """
-    try:
+        # 6. Use OpenAI with Tools
         from openai import OpenAI
         from app.tools import AVAILABLE_TOOLS, execute_function
         import json
         
-        # Get user authentication
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            if payload:
-                user_id = str(payload.get("sub"))
-        
-        print(f"DEBUG: Function calling chat for user: {user_id}")
-        
-        # Handle conversation persistence
-        conv_id = chat_request.conversation_id
-        if not conv_id:
-            smart_title = await generate_title(chat_request.question)
-            new_conv = Conversation(title=smart_title, user_id=user_id)
-            db.add(new_conv)
-            db.commit()
-            db.refresh(new_conv)
-            conv_id = new_conv.id
-        
-        # Save user message
-        user_msg = Message(
-            conversation_id=conv_id,
-            role="user",
-            content=chat_request.question,
-            token_count=count_tokens(chat_request.question)
-        )
-        db.add(user_msg)
-        db.commit()
-        
-        # Check if RAG context is needed (not for simple tool calls like weather)
-        needs_rag = not any(keyword in chat_request.question.lower() 
-                           for keyword in ['weather', 'temperature', 'forecast'])
-        
-        context_text = ""
-        source_data = []
-        
-        if needs_rag:
-            # Perform RAG retrieval
-            filters = None
-            if chat_request.doc_ids:
-                filters = {"filename": {"$in": chat_request.doc_ids}}
-            elif chat_request.file_type:
-                filters = {"file_type": chat_request.file_type}
-            
-            docs = request.app.state.vectordb.similarity_search(
-                chat_request.question, 
-                k=5, 
-                filter=filters
-            )
-            
-            if docs:
-                context_parts = []
-                for i, doc in enumerate(docs):
-                    filename = doc.metadata.get("filename", "Unknown File")
-                    clean_content = doc.page_content.replace("\\x00", "")
-                    context_parts.append(f"[Source {i+1}]: From {filename}\\n{clean_content}")
-                    source_data.append({
-                        "content": doc.page_content,
-                        "metadata": doc.metadata
-                    })
-                context_text = "\\n\\n".join(context_parts)
-        
-        # Build message history for OpenAI
+        # Build messages for OpenAI
         messages = [
             {
-                "role": "system", 
-                "content": f"""You are a helpful AI assistant with access to real-time tools and a knowledge base.
+                "role": "system",
+                "content": f"""You are a RAG (Retrieval-Augmented Generation) assistant. You ONLY answer questions based on the uploaded documents in the knowledge base.
 
-When answering questions:
-1. Use the available tools when appropriate (e.g., get_weather for weather queries)
-2. Use the provided context from documents when available
-3. Combine both sources intelligently to give comprehensive answers
+STRICT RULES:
+1. **ONLY use information from the "Context from knowledge base" section below**
+2. **DO NOT use your general training knowledge** - If the answer isn't in the uploaded documents, say "I don't know."
+3. **For greetings** (hi, hello) → Respond briefly and friendly
+4. **For weather queries** → Use the get_weather tool
+5. **For "remember this"** → Acknowledge you'll remember it
+6. **For any other question** → ONLY answer if the information exists in the context below
 
-{f"Context from knowledge base:\\n{context_text}" if context_text else ""}"""
+Context from knowledge base:
+{context_text if context_text else "No documents available"}
+
+Chat History:
+{history_text}
+
+User Memories:
+{memory_text}
+
+REMEMBER: If the answer is not in the uploaded documents above, you MUST respond with "I don't know." Do not make up answers or use external knowledge."""
             }
         ]
-        
-        # Add conversation history
-        for msg in chat_request.history:
-            messages.append({
-                "role": msg.get("role"),
-                "content": msg.get("content")
-            })
         
         # Add current question
         messages.append({
@@ -586,6 +496,17 @@ When answering questions:
                 # Execute the function
                 function_response = await execute_function(function_name, function_args)
                 
+                # ADDED: Include tool usage in sources for citation visibility
+                source_data.append({
+                    "content": function_response,
+                    "metadata": {
+                        "filename": f"Tool: {function_name}",
+                        "doc_id": f"tool_{function_name}",
+                        "confidence": 100,
+                        "type": "tool"
+                    }
+                })
+                
                 # Add function response to messages
                 messages.append({
                     "tool_call_id": tool_call.id,
@@ -600,38 +521,55 @@ When answering questions:
                 messages=messages
             )
             
-            final_answer = second_response.choices[0].message.content
+            answer = second_response.choices[0].message.content
+            total_tokens = response.usage.total_tokens + second_response.usage.total_tokens
         else:
             # No tool calls needed, use the direct response
-            final_answer = response_message.content
+            answer = response_message.content
+            total_tokens = response.usage.total_tokens
         
-        # Save AI response
+        # 7. Calculate Tokens for tracking
+        print(f"DEBUG: Token usage for this request: {total_tokens} (Threshold: {SUMMARIZATION_THRESHOLD})")
+
+        # 8. Sliding Window Logic (75% Rule)
+        # If tokens are high, summarize the older parts for the next turn
+        new_summary = None
+        if total_tokens > SUMMARIZATION_THRESHOLD and len(chat_request.history) > 10:
+            print(f"DEBUG: Tokens exceeded 75% of limit ({total_tokens}/{MODEL_TOKEN_LIMIT}). Summarizing...")
+            
+            # Keep the last 10 messages as "fresh" context
+            to_summarize = chat_request.history[:-10] 
+            new_summary = await summarize_chat(to_summarize)
+            print(f"DEBUG: Generated Summary for older context: {new_summary}")
+
+        # Hide sources if it's a greeting OR if the AI says "I don't know"
+        hide_sources = is_greeting or "i don't know" in answer.lower()
+
+        # Save AI Response to DB
         ai_msg = Message(
             conversation_id=conv_id,
             role="assistant",
-            content=final_answer,
-            token_count=count_tokens(final_answer)
+            content=answer,
+            token_count=count_tokens(answer)
         )
         db.add(ai_msg)
         db.commit()
-        
+
         return {
-            "answer": final_answer,
-            "conversation_id": conv_id,
-            "sources": source_data,
-            "token_usage": response.usage.total_tokens,
-            "tools_used": tools_used
+            "answer": answer,
+            "conversation_id": conv_id, # Return the ID so frontend can persist session
+            "sources": source_data if not hide_sources and docs else [],
+            "token_usage": total_tokens,
+            "new_summary": new_summary,
+            "tools_used": tools_used  # Add tools_used to response
         }
-        
     except Exception as e:
-        print(f"CRITICAL FUNCTION CALLING ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"CRITICAL CHAT ERROR: {str(e)}")
         return {
-            "answer": f"Sorry, I encountered an error: {str(e)}",
-            "sources": [],
-            "conversation_id": conv_id if 'conv_id' in locals() else None
+            "answer": "I don't know.",
+            "sources": []
         }
+
 
 
 @router.post("/search")
