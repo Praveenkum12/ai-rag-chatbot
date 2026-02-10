@@ -4,25 +4,22 @@ Tool Registry - Central management for all function calling tools
 
 import json
 from typing import Dict, Any, Callable
-from .weather import get_weather, WEATHER_TOOL
+from .weather import get_weather, WEATHER_TOOL, get_user_location, LOCATION_TOOL
 
 
 # Registry of all available tools (OpenAI function schemas)
 AVAILABLE_TOOLS = [
     WEATHER_TOOL,
+    LOCATION_TOOL,
     # Add more tools here as you create them
-    # CALCULATOR_TOOL,
-    # DATABASE_QUERY_TOOL,
-    # etc.
 ]
 
 
 # Function mapping - maps function names to their implementations
 FUNCTION_MAP: Dict[str, Callable] = {
     "get_weather": get_weather,
+    "get_user_location": get_user_location,
     # Add more function mappings here
-    # "calculate": calculate,
-    # "search_database": search_database,
 }
 
 
