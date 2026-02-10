@@ -122,6 +122,80 @@
         >
           <i data-lucide="bar-chart-2" class="w-5 h-5"></i>
         </button>
+        <!-- ADDED: Tool Showcase Button -->
+        <div class="relative">
+          <button
+            onclick="toggleToolsMenu()"
+            class="p-2 glass rounded-lg hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 transition-all flex items-center gap-2"
+            title="AI Tools & Capabilities"
+          >
+            <i data-lucide="sparkles" class="w-5 h-5"></i>
+          </button>
+          <!-- Tool Showcase Dropdown -->
+          <div
+            id="toolsMenu"
+            class="hidden absolute right-0 mt-3 w-72 glass-dark rounded-2xl border border-white/10 p-5 shadow-2xl z-50 animate-fadeIn"
+          >
+            <h3
+              class="text-sm font-bold font-outfit mb-4 flex items-center gap-2"
+            >
+              <i data-lucide="zap" class="w-4 h-4 text-yellow-400"></i>
+              Real-time Capabilities
+            </h3>
+            <div class="space-y-4">
+              <!-- Weather -->
+              <div class="space-y-2">
+                <div
+                  class="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                >
+                  <i data-lucide="cloud-sun" class="w-3 h-3 text-blue-400"></i>
+                  Weather
+                </div>
+                <button
+                  onclick="useExample('whats the weather in delhi')"
+                  class="w-full text-left text-xs p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-slate-300 border border-white/5"
+                >
+                  "whats the weather in delhi"
+                </button>
+              </div>
+              <!-- Time -->
+              <div class="space-y-2">
+                <div
+                  class="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                >
+                  <i data-lucide="clock" class="w-3 h-3 text-purple-400"></i>
+                  Global Time
+                </div>
+                <button
+                  onclick="useExample('whats the time in new york')"
+                  class="w-full text-left text-xs p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-slate-300 border border-white/5"
+                >
+                  "whats the time in new york"
+                </button>
+              </div>
+              <!-- Location -->
+              <div class="space-y-2">
+                <div
+                  class="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                >
+                  <i data-lucide="map-pin" class="w-3 h-3 text-red-400"></i>
+                  My Place
+                </div>
+                <button
+                  onclick="useExample('where am i')"
+                  class="w-full text-left text-xs p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-slate-300 border border-white/5"
+                >
+                  "where am i right now?"
+                </button>
+              </div>
+            </div>
+            <div
+              class="mt-4 pt-4 border-t border-white/5 text-[10px] text-slate-500 text-center italic"
+            >
+              AI automatically triggers these tools based on your question.
+            </div>
+          </div>
+        </div>
         <div class="h-8 w-[1px] bg-white/10"></div>
         <div class="flex items-center gap-2">
           <button
@@ -602,6 +676,34 @@
       let activeDateFilter = "any";
       let chatHistory = []; // Our new memory box
       let currentConversationId = null; // Track current session
+
+      function toggleToolsMenu() {
+        const menu = document.getElementById("toolsMenu");
+        menu.classList.toggle("hidden");
+        // Close menu when clicking outside
+        if (!menu.classList.contains("hidden")) {
+          const closeListener = (e) => {
+            if (
+              !menu.contains(e.target) &&
+              !e.target.closest('button[onclick="toggleToolsMenu()"]')
+            ) {
+              menu.classList.add("hidden");
+              document.removeEventListener("click", closeListener);
+            }
+          };
+          setTimeout(
+            () => document.addEventListener("click", closeListener),
+            10,
+          );
+        }
+      }
+
+      function useExample(q) {
+        const input = document.getElementById("userInput");
+        input.value = q;
+        document.getElementById("toolsMenu").classList.add("hidden");
+        sendMessage();
+      }
 
       function clearSelection() {
         selectedDocIds = [];
