@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from typing import List, Optional
 from pathlib import Path
 import uuid
@@ -118,6 +118,10 @@ async def upload_document(request: Request, file: UploadFile = File(...), user_i
 
         request.app.state.vectordb.add_documents(chunks)
 
+        # Invalidate BM25 cache since we added new documents
+        from app.rag.qa import invalidate_bm25_cache
+        invalidate_bm25_cache(user_id)
+
         return {
             "document_id": doc_id,
             "filename": file.filename,
@@ -179,18 +183,30 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         # 1. Handle Conversation Persistence
         conv_id = chat_request.conversation_id
         if not conv_id:
-            # Generate a smart title using LLM
-            smart_title = await generate_title(chat_request.question)
-            
-            # Create new conversation if none provided
+            # OPTIMIZED: Create conversation with placeholder title first
+            # Generate smart title in background to avoid blocking response
             new_conv = Conversation(
-                title=smart_title,
+                title=chat_request.question[:40] + "...",  # Temporary placeholder
                 user_id=user_id # LINKED TO LOGGED IN USER
             )
             db.add(new_conv)
             db.commit()
             db.refresh(new_conv)
             conv_id = new_conv.id
+            
+            # Generate smart title in background (non-blocking)
+            import asyncio
+            async def update_title_async():
+                try:
+                    smart_title = await generate_title(chat_request.question)
+                    new_conv.title = smart_title
+                    db.commit()
+                    print(f"DEBUG: Title updated to: {smart_title}")
+                except Exception as e:
+                    print(f"DEBUG: Background title generation failed: {e}")
+            
+            # Fire and forget - don't await
+            asyncio.create_task(update_title_async())
         
         # Save User Message to DB
         user_msg = Message(
@@ -285,54 +301,36 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         clean_q = chat_request.question.lower().strip().strip('?!.')
         is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
         
+        docs_with_scores = []
         if is_greeting:
             print("DEBUG: Greeting detected. Skipping document retrieval.")
-            docs = []
-            filters = None
         else:
-            # 1. Get Hybrid Retriever
-            # Optimized: Reducing k from 5 to 3 to save tokens/cost (3+3 = max 6 docs)
-            retriever = get_hybrid_retriever(
-                request.app.state.vectordb, 
-                search_kwargs={"k": 3, "filter": filters if filters else None}
-            )
-            
+            # OPTIMIZED: Use similarity_search_with_score directly to get docs + scores in ONE call
+            # This eliminates the redundant second search that was adding latency
             print(f"DEBUG: Active filters: {filters}")
-            
-            # 2. Invoke retriever
-            docs = retriever.invoke(chat_request.question)
-            print(f"DEBUG: Retrieved {len(docs)} docs for question: '{chat_request.question}'")
+            try:
+                docs_with_scores = request.app.state.vectordb.similarity_search_with_score(
+                    chat_request.question, 
+                    k=3,  # Reduced from 5 to 3 for faster retrieval
+                    filter=filters if filters else None
+                )
+                print(f"DEBUG: Retrieved {len(docs_with_scores)} docs with scores in single pass")
+            except Exception as e:
+                print(f"DEBUG: Retrieval failed: {e}")
+                docs_with_scores = []
 
-        # --- RELEVANCE FILTERING REMOVED ---
-        # Passing all retrieved documents to the LLM regardless of relevance score as requested.
-        # ---------------------------
-        
         # 3. Clean and Label Docs
         context_parts = []
         source_data = []
-        
-        # Get scores for the top docs in this specific search (for confidence metrics)
-        scored_results = {}
-        if not is_greeting and len(docs) > 0:
-            try:
-                scored_results = {
-                    doc.page_content: score 
-                    for doc, score in request.app.state.vectordb.similarity_search_with_score(
-                        chat_request.question, k=10, filter=filters if filters else None
-                    )
-                }
-            except Exception as e:
-                print(f"DEBUG: Scoring failed: {e}")
 
-        for i, doc in enumerate(docs):
+        for i, (doc, score) in enumerate(docs_with_scores):
             filename = doc.metadata.get("filename", "Unknown File")
             # Sanitize content for LLM
             clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
             context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
             
             # Calculate Percentage: 0.0 distance is 100%, 1.2+ is ~0%
-            raw_score = scored_results.get(doc.page_content, 1.0)
-            confidence = max(0, min(100, round((1 - (raw_score / 1.5)) * 100)))
+            confidence = max(0, min(100, round((1 - (score / 1.5)) * 100)))
             
             source_data.append({
                 "content": doc.page_content,
@@ -553,7 +551,7 @@ Memories:
         return {
             "answer": answer,
             "conversation_id": conv_id, # Return the ID so frontend can persist session
-            "sources": source_data if not hide_sources and docs else [],
+            "sources": source_data if not hide_sources and docs_with_scores else [],
             "token_usage": total_tokens,
             "new_summary": new_summary,
             "tools_used": tools_used  # Add tools_used to response
@@ -572,6 +570,195 @@ Memories:
             "sources": [],
             "token_usage": 0
         }
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+    """
+    Streaming version of chat endpoint using Server-Sent Events (SSE).
+    Returns tokens as they are generated for immediate user feedback.
+    """
+    async def generate():
+        try:
+            import json
+            
+            # 1. Handle Conversation Persistence (same as regular chat)
+            conv_id = chat_request.conversation_id
+            if not conv_id:
+                new_conv = Conversation(
+                    title=chat_request.question[:40] + "...",
+                    user_id=user_id
+                )
+                db.add(new_conv)
+                db.commit()
+                db.refresh(new_conv)
+                conv_id = new_conv.id
+                
+                # Background title generation
+                import asyncio
+                async def update_title_async():
+                    try:
+                        smart_title = await generate_title(chat_request.question)
+                        new_conv.title = smart_title
+                        db.commit()
+                    except Exception as e:
+                        print(f"DEBUG: Background title generation failed: {e}")
+                asyncio.create_task(update_title_async())
+            
+            # Send conversation ID immediately
+            yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conv_id})}\n\n"
+            
+            # 2. Save user message
+            user_msg = Message(
+                conversation_id=conv_id,
+                role="user",
+                content=chat_request.question,
+                token_count=count_tokens(chat_request.question)
+            )
+            db.add(user_msg)
+            db.commit()
+            
+            # 3. Build filters (same as regular chat)
+            meta_filters = [{"user_id": {"$eq": user_id if user_id else "guest"}}]
+            
+            if chat_request.doc_ids and len(chat_request.doc_ids) > 0:
+                if len(chat_request.doc_ids) == 1:
+                    meta_filters.append({"doc_id": {"$eq": chat_request.doc_ids[0]}})
+                else:
+                    meta_filters.append({"doc_id": {"$in": chat_request.doc_ids}})
+            
+            if chat_request.file_type and chat_request.file_type != "all":
+                meta_filters.append({"file_type": {"$eq": chat_request.file_type}})
+            
+            if chat_request.date_filter and chat_request.date_filter != "any":
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                if chat_request.date_filter == "today":
+                    cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                elif chat_request.date_filter == "week":
+                    cutoff = now - timedelta(days=7)
+                meta_filters.append({"processed_at": {"$gte": cutoff.isoformat()}})
+            
+            filters = None
+            if len(meta_filters) == 1:
+                filters = meta_filters[0]
+            elif len(meta_filters) > 1:
+                filters = {"$and": meta_filters}
+            
+            # 4. Retrieval (optimized single-pass)
+            clean_q = chat_request.question.lower().strip().strip('?!.')
+            is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
+            
+            docs_with_scores = []
+            if not is_greeting:
+                try:
+                    docs_with_scores = request.app.state.vectordb.similarity_search_with_score(
+                        chat_request.question, 
+                        k=3,
+                        filter=filters if filters else None
+                    )
+                except Exception as e:
+                    print(f"DEBUG: Retrieval failed: {e}")
+            
+            # 5. Build context
+            context_parts = []
+            source_data = []
+            
+            for i, (doc, score) in enumerate(docs_with_scores):
+                filename = doc.metadata.get("filename", "Unknown File")
+                clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
+                context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
+                
+                confidence = max(0, min(100, round((1 - (score / 1.5)) * 100)))
+                source_data.append({
+                    "content": doc.page_content,
+                    "metadata": {**doc.metadata, "confidence": confidence}
+                })
+            
+            context_text = "\n\n".join(context_parts)
+            
+            # 6. Build messages for OpenAI streaming
+            history_text = ""
+            for msg in chat_request.history:
+                role_raw = msg.get("role", "user")
+                if role_raw == "system":
+                    role = "SUMMARY"
+                elif role_raw == "user":
+                    role = "HUMAN"
+                else:
+                    role = "AI"
+                history_text += f"{role}: {msg.get('content')}\n"
+            
+            if not history_text:
+                history_text = "None"
+            
+            memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).all() if user_id else []
+            memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "None"
+            
+            if is_greeting:
+                system_content = "You are a warm and helpful Knowledge Assistant. Greet the user and offer assistance. Be concise."
+            else:
+                system_content = f"""You are a Knowledge Assistant. Use the provided context to answer.
+
+DIRECTIVES:
+1. Use tools (`get_weather`, `get_datetime`, `get_user_location`) for weather/time/location.
+2. Search "Knowledge Base" (e.g. resumes) to synthesize answers. 
+3. If no info/tool can answer, say "I don't know."
+
+Knowledge Base:
+{context_text if context_text else "None"}
+
+History:
+{history_text}
+
+Memories:
+{memory_text}"""
+            
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": chat_request.question}
+            ]
+            
+            # 7. Stream from OpenAI
+            from openai import OpenAI
+            client = OpenAI()
+            
+            stream = client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=messages,
+                stream=True
+            )
+            
+            full_response = ""
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    full_response += token
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            
+            # 8. Save AI response
+            ai_msg = Message(
+                conversation_id=conv_id,
+                role="assistant",
+                content=full_response,
+                token_count=count_tokens(full_response)
+            )
+            db.add(ai_msg)
+            db.commit()
+            
+            # 9. Send sources at the end
+            hide_sources = is_greeting or (full_response and "i don't know" in full_response.lower())
+            if not hide_sources and source_data:
+                yield f"data: {json.dumps({'type': 'sources', 'sources': source_data})}\n\n"
+            
+            # 10. Send completion signal
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            print(f"STREAMING ERROR: {str(e)}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 
@@ -626,6 +813,10 @@ async def delete_document(request: Request, doc_id: str, user_id: str = Depends(
             except Exception as e:
                 print(f"Error deleting file {file_path}: {e}")
 
+        # Invalidate BM25 cache since we deleted documents
+        from app.rag.qa import invalidate_bm25_cache
+        invalidate_bm25_cache(user_id)
+
         return {"message": f"Document {doc_id} deleted successfully."}
     except Exception as e:
         print(f"Error deleting document {doc_id}: {str(e)}")
@@ -643,6 +834,10 @@ async def clear_documents(request: Request, user_id: str = Depends(get_current_u
         # Clear just this user's data from Chroma
         request.app.state.vectordb.delete(where={"user_id": user_id})
         print(f"Cleared vectordb for user: {user_id}")
+        
+        # Invalidate BM25 cache since we cleared all documents
+        from app.rag.qa import invalidate_bm25_cache
+        invalidate_bm25_cache(user_id)
         
         # Disk cleanup is more complex since we'd need to know which files belong to whom.
         # For now, we'll focus on the Vector store partitioning.
