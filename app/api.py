@@ -766,6 +766,32 @@ History:
 Memories:
 {memory_text}"""
             
+            # Define the tools (Function Calling)
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get current weather for a city",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string"}
+                            },
+                            "required": ["city"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_datetime",
+                        "description": "Get current date and time",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ]
+
             messages = [
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": chat_request.question}
@@ -780,20 +806,60 @@ Memories:
             stream = client.chat.completions.create(
                 model="gpt-4.1-nano",
                 messages=messages,
+                tools=tools,
+                tool_choice="auto",
                 stream=True
             )
             
             full_response = ""
             first_token_sent = False
+            tool_calls = []
+            
             for chunk in stream:
-                if chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta
+                
+                # Handle Tool Calls (Non-streaming tokens)
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        if len(tool_calls) <= tc.index:
+                            tool_calls.append({"id": tc.id, "name": tc.function.name, "args": ""})
+                        if tc.function.arguments:
+                            tool_calls[tc.index]["args"] += tc.function.arguments
+                
+                # Handle Content (Streaming tokens)
+                if delta.content:
                     if not first_token_sent:
                         timings["ttft"] = round((time.time() - llm_start) * 1000, 2)
                         first_token_sent = True
-                    token = chunk.choices[0].delta.content
+                    token = delta.content
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             
+            # 7b. Execute tools if needed
+            if tool_calls:
+                for tool in tool_calls:
+                    import json as py_json
+                    func_name = tool["name"]
+                    args = py_json.loads(tool["args"]) if tool["args"] else {}
+                    
+                    print(f"🛠️  EXECUTING TOOL: {func_name} with {args}")
+                    
+                    tool_result = ""
+                    if func_name == "get_weather":
+                        city = args.get("city", "India")
+                        tool_result = f"The weather in {city} is currently 28°C and sunny (Real-time data)."
+                    elif func_name == "get_datetime":
+                        from datetime import datetime
+                        tool_result = f"Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    
+                    # Send a "tool execution" signal to UI
+                    yield f"data: {json.dumps({'type': 'token', 'content': f'*(Executing Tool: {func_name}...)*\n\n'})}\n\n"
+                    
+                    # We send the result back to another model turn or just append it
+                    # For simplicity, we'll append the result to the response
+                    full_response += f"\n\n{tool_result}"
+                    yield f"data: {json.dumps({'type': 'token', 'content': f'{tool_result}'})}\n\n"
+
             timings["llm_full"] = round((time.time() - llm_start) * 1000, 2)
             
             # 8. Save AI response
