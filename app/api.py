@@ -4,6 +4,7 @@ from typing import List, Optional
 from pathlib import Path
 import uuid
 import tiktoken
+import time
 
 from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
@@ -25,6 +26,12 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_NAME = "gpt-4.1-nano" # or whatever model you use
 MODEL_TOKEN_LIMIT = 10000 # Example limit for older/local models
 SUMMARIZATION_THRESHOLD = int(MODEL_TOKEN_LIMIT * 0.75)
+
+# OPTIMIZED: Initialize clients once at global scope to avoid per-request overhead
+from openai import OpenAI
+from app.rag.qa import get_llm
+client = OpenAI()
+llm_client = get_llm()
 
 from datetime import datetime, timedelta
 
@@ -177,10 +184,16 @@ async def list_documents(user_id: str = Depends(get_current_user_id), request: R
 
 @router.post("/chat")
 async def chat(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+    request_start = time.time()
+    print(f"\n{'='*60}")
+    print(f"⏱️  REQUEST START: {chat_request.question[:50]}...")
+    print(f"{'='*60}")
+    
     try:
         print(f"DEBUG: Final user_id for this request: {user_id}")
 
         # 1. Handle Conversation Persistence
+        conv_start = time.time()
         conv_id = chat_request.conversation_id
         if not conv_id:
             # OPTIMIZED: Create conversation with placeholder title first
@@ -208,7 +221,11 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             # Fire and forget - don't await
             asyncio.create_task(update_title_async())
         
-        # Save User Message to DB
+        conv_time = time.time() - conv_start
+        print(f"⏱️  [1] Conversation setup: {conv_time*1000:.2f}ms")
+        
+        # Save User Message to DB (Synchronous again to ensure order)
+        msg_start = time.time()
         user_msg = Message(
             conversation_id=conv_id,
             role="user",
@@ -217,6 +234,8 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         )
         db.add(user_msg)
         db.commit()
+        msg_time = time.time() - msg_start
+        print(f"⏱️  [2] Save user message: {msg_time*1000:.2f}ms")
 
         # 1.5. Check for "Remember This" command (flexible: with or without colon)
         question_lower = chat_request.question.lower().strip()
@@ -255,6 +274,7 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
                     }
 
         # Construct filters for retrieval
+        filter_start = time.time()
         meta_filters = []
         
         # 0. User Filter (MANDATORY)
@@ -293,6 +313,9 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             filters = meta_filters[0]
         elif len(meta_filters) > 1:
             filters = {"$and": meta_filters}
+        
+        filter_time = time.time() - filter_start
+        print(f"⏱️  [3] Build filters: {filter_time*1000:.2f}ms")
 
         from app.rag.qa import get_hybrid_retriever, get_llm, get_prompt
         from langchain_core.output_parsers import StrOutputParser
@@ -301,6 +324,7 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         clean_q = chat_request.question.lower().strip().strip('?!.')
         is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
         
+        retrieval_start = time.time()
         docs_with_scores = []
         if is_greeting:
             print("DEBUG: Greeting detected. Skipping document retrieval.")
@@ -318,8 +342,12 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             except Exception as e:
                 print(f"DEBUG: Retrieval failed: {e}")
                 docs_with_scores = []
+        
+        retrieval_time = time.time() - retrieval_start
+        print(f"⏱️  [4] Document retrieval: {retrieval_time*1000:.2f}ms ({len(docs_with_scores)} docs)")
 
         # 3. Clean and Label Docs
+        context_start = time.time()
         context_parts = []
         source_data = []
 
@@ -338,6 +366,8 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             })
         
         context_text = "\n\n".join(context_parts)
+        context_time = time.time() - context_start
+        print(f"⏱️  [5] Build context: {context_time*1000:.2f}ms ({len(context_text)} chars)")
 
         # 4. Early return if no documents and not a greeting/tool-friendly query
         # We allow the LLM to proceed if the question mentions tools or is a greeting
@@ -369,7 +399,7 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             }
         
         # 5. Run LLM
-        llm = get_llm()
+        prompt_start = time.time()
         
         # 5. Format History for the Prompt
         history_text = ""
@@ -387,17 +417,14 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             history_text = "None"
 
         # 5.5 Fetch Long-Term Memories
+        memory_start = time.time()
         memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).all() if user_id else []
+        memory_time = time.time() - memory_start
+        print(f"   └─ Memory query: {memory_time*1000:.2f}ms")
+        
         memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "None"
 
-        print(f"DEBUG: Context length: {len(context_text)}")
-        
-        # 6. Use OpenAI with Tools
-        from openai import OpenAI
-        from app.tools import AVAILABLE_TOOLS, execute_function
-        import json
-        
-        # Build messages for OpenAI
+        # 6. Build messages for OpenAI
         if is_greeting:
             system_content = "You are a warm and helpful Knowledge Assistant. Greet the user and offer assistance. Be concise."
         else:
@@ -418,17 +445,15 @@ Memories:
 {memory_text}"""
 
         messages = [{"role": "system", "content": system_content}]
+        messages.append({"role": "user", "content": chat_request.question})
         
-        # Add current question
-        messages.append({
-            "role": "user",
-            "content": chat_request.question
-        })
+        prompt_time = time.time() - prompt_start
+        print(f"⏱️  [6] Prepare prompt: {prompt_time*1000:.2f}ms")
         
-        # Initialize OpenAI client
-        client = OpenAI()
-        
-        # First API call - optimized for greetings
+        # First API call
+        from app.tools import AVAILABLE_TOOLS, execute_function
+        import json
+        llm_start = time.time()
         llm_kwargs = {
             "model": "gpt-4.1-nano",
             "messages": messages,
@@ -440,6 +465,8 @@ Memories:
             llm_kwargs["tool_choice"] = "auto"
             
         response = client.chat.completions.create(**llm_kwargs)
+        llm_time = time.time() - llm_start
+        print(f"⏱️  [7] LLM call (initial): {llm_time*1000:.2f}ms")
         
         # Initial tool check
         response_message = response.choices[0].message
@@ -539,6 +566,7 @@ Memories:
         hide_sources = is_greeting or (answer and "i don't know" in answer.lower())
 
         # Save AI Response to DB
+        save_start = time.time()
         ai_msg = Message(
             conversation_id=conv_id,
             role="assistant",
@@ -547,6 +575,14 @@ Memories:
         )
         db.add(ai_msg)
         db.commit()
+        save_time = time.time() - save_start
+        print(f"⏱️  [8] Save AI response: {save_time*1000:.2f}ms")
+
+        # Calculate total time
+        total_time = time.time() - request_start
+        print(f"\n{'='*60}")
+        print(f"✅ TOTAL REQUEST TIME: {total_time*1000:.2f}ms ({total_time:.2f}s)")
+        print(f"{'='*60}\n")
 
         return {
             "answer": answer,
@@ -579,10 +615,13 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
     Returns tokens as they are generated for immediate user feedback.
     """
     async def generate():
+        request_start = time.time()
+        timings = {}
         try:
             import json
             
-            # 1. Handle Conversation Persistence (same as regular chat)
+            # 1. Handle Conversation Persistence
+            conv_start = time.time()
             conv_id = chat_request.conversation_id
             if not conv_id:
                 new_conv = Conversation(
@@ -605,10 +644,13 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                         print(f"DEBUG: Background title generation failed: {e}")
                 asyncio.create_task(update_title_async())
             
+            timings["setup"] = round((time.time() - conv_start) * 1000, 2)
+            
             # Send conversation ID immediately
             yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conv_id})}\n\n"
             
             # 2. Save user message
+            msg_start = time.time()
             user_msg = Message(
                 conversation_id=conv_id,
                 role="user",
@@ -617,8 +659,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             )
             db.add(user_msg)
             db.commit()
+            timings["save_user"] = round((time.time() - msg_start) * 1000, 2)
             
-            # 3. Build filters (same as regular chat)
+            # 3. Build filters
+            filter_start = time.time()
             meta_filters = [{"user_id": {"$eq": user_id if user_id else "guest"}}]
             
             if chat_request.doc_ids and len(chat_request.doc_ids) > 0:
@@ -627,7 +671,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                 else:
                     meta_filters.append({"doc_id": {"$in": chat_request.doc_ids}})
             
-            if chat_request.file_type and chat_request.file_type != "all":
+            if chat_request.file_type and chat_request.file_type != "all" and chat_request.file_type:
                 meta_filters.append({"file_type": {"$eq": chat_request.file_type}})
             
             if chat_request.date_filter and chat_request.date_filter != "any":
@@ -644,8 +688,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                 filters = meta_filters[0]
             elif len(meta_filters) > 1:
                 filters = {"$and": meta_filters}
+            timings["filters"] = round((time.time() - filter_start) * 1000, 2)
             
-            # 4. Retrieval (optimized single-pass)
+            # 4. Retrieval
+            retrieval_start = time.time()
             clean_q = chat_request.question.lower().strip().strip('?!.')
             is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
             
@@ -659,8 +705,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                     )
                 except Exception as e:
                     print(f"DEBUG: Retrieval failed: {e}")
+            timings["retrieval"] = round((time.time() - retrieval_start) * 1000, 2)
             
             # 5. Build context
+            context_start = time.time()
             context_parts = []
             source_data = []
             
@@ -676,8 +724,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                 })
             
             context_text = "\n\n".join(context_parts)
+            timings["context"] = round((time.time() - context_start) * 1000, 2)
             
             # 6. Build messages for OpenAI streaming
+            prompt_start = time.time()
             history_text = ""
             for msg in chat_request.history:
                 role_raw = msg.get("role", "user")
@@ -692,8 +742,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             if not history_text:
                 history_text = "None"
             
+            memory_start = time.time()
             memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).all() if user_id else []
             memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "None"
+            timings["memory"] = round((time.time() - memory_start) * 1000, 2)
             
             if is_greeting:
                 system_content = "You are a warm and helpful Knowledge Assistant. Greet the user and offer assistance. Be concise."
@@ -718,8 +770,10 @@ Memories:
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": chat_request.question}
             ]
+            timings["prompt"] = round((time.time() - prompt_start) * 1000, 2)
             
             # 7. Stream from OpenAI
+            llm_start = time.time()
             from openai import OpenAI
             client = OpenAI()
             
@@ -730,13 +784,20 @@ Memories:
             )
             
             full_response = ""
+            first_token_sent = False
             for chunk in stream:
                 if chunk.choices[0].delta.content:
+                    if not first_token_sent:
+                        timings["ttft"] = round((time.time() - llm_start) * 1000, 2)
+                        first_token_sent = True
                     token = chunk.choices[0].delta.content
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             
+            timings["llm_full"] = round((time.time() - llm_start) * 1000, 2)
+            
             # 8. Save AI response
+            save_ai_start = time.time()
             ai_msg = Message(
                 conversation_id=conv_id,
                 role="assistant",
@@ -745,14 +806,28 @@ Memories:
             )
             db.add(ai_msg)
             db.commit()
+            timings["save_ai"] = round((time.time() - save_ai_start) * 1000, 2)
             
-            # 9. Send sources at the end
+            # 9. Send sources
             hide_sources = is_greeting or (full_response and "i don't know" in full_response.lower())
             if not hide_sources and source_data:
                 yield f"data: {json.dumps({'type': 'sources', 'sources': source_data})}\n\n"
             
-            # 10. Send completion signal
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            # 10. Send timings
+            timings["total"] = round((time.time() - request_start) * 1000, 2)
+            yield f"data: {json.dumps({'type': 'timing', 'timings': timings})}\n\n"
+
+            # Print console log as well since user liked it
+            print(f"\n⏱️  STREAM SESSION COMPLETE")
+            print(f"   └─ Setup: {timings['setup']}ms")
+            print(f"   └─ Save User: {timings['save_user']}ms")
+            print(f"   └─ Retrieval: {timings['retrieval']}ms")
+            print(f"   └─ Prompt: {timings['prompt']}ms")
+            print(f"   └─ TTFT (First Token): {timings['ttft']}ms")
+            print(f"   └─ Total: {timings['total']}ms\n")
+
+            # 11. Send completion signal
+            yield f"data: {json.dumps({'type': 'done', 'token_usage': count_tokens(chat_request.question) + count_tokens(full_response)})}\n\n"
             
         except Exception as e:
             print(f"STREAMING ERROR: {str(e)}")
@@ -941,7 +1016,9 @@ async def get_conversation_history(conv_id: str, db: Session = Depends(get_db), 
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found or access denied")
         
-    messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc()).all()
+    # Sort by created_at then role (user should come before assistant if tied)
+    # 'user' DESC puts it before 'assistant' in many collations, but role-based sorting is mostly for ties
+    messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc(), Message.role.desc()).all()
     return [{
         "role": msg.role,
         "content": msg.content
