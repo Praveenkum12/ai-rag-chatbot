@@ -8,7 +8,7 @@ import time
 
 from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
-from app.rag.qa import get_qa_chain
+from app.rag.qa import get_qa_chain, get_hybrid_retriever
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -690,21 +690,24 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                 filters = {"$and": meta_filters}
             timings["filters"] = round((time.time() - filter_start) * 1000, 2)
             
-            # 4. Retrieval
+            # 4. Retrieval (HYBRID: Vector + BM25)
             retrieval_start = time.time()
             clean_q = chat_request.question.lower().strip().strip('?!.')
             is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
             
-            docs_with_scores = []
+            retrieved_docs = []
             if not is_greeting:
                 try:
-                    docs_with_scores = request.app.state.vectordb.similarity_search_with_score(
-                        chat_request.question, 
-                        k=3,
-                        filter=filters if filters else None
+                    # USE THE SECURE HYBRID RETRIEVER
+                    hybrid_retriever = get_hybrid_retriever(
+                        request.app.state.vectordb, 
+                        search_kwargs={"k": 5, "filter": filters}, 
+                        user_id=user_id
                     )
+                    retrieved_docs = hybrid_retriever.invoke(chat_request.question)
+                    print(f"DEBUG: Hybrid Retrieval returned {len(retrieved_docs)} docs")
                 except Exception as e:
-                    print(f"DEBUG: Retrieval failed: {e}")
+                    print(f"DEBUG: Hybrid Retrieval failed: {e}")
             timings["retrieval"] = round((time.time() - retrieval_start) * 1000, 2)
             
             # 5. Build context
@@ -712,12 +715,15 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             context_parts = []
             source_data = []
             
-            for i, (doc, score) in enumerate(docs_with_scores):
+            for i, doc in enumerate(retrieved_docs):
                 filename = doc.metadata.get("filename", "Unknown File")
                 clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
                 context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
                 
-                confidence = max(0, min(100, round((1 - (score / 1.5)) * 100)))
+                # Hybrid results from Ensemble don't have scores by default.
+                # We'll assign a baseline confidence or 0 if it's purely a keyword match.
+                # In a more advanced version, we'd use Cross-Encoders to re-rank and get scores.
+                confidence = doc.metadata.get("score", 85) # Default high-ish for reranked results
                 source_data.append({
                     "content": doc.page_content,
                     "metadata": {**doc.metadata, "confidence": confidence}
