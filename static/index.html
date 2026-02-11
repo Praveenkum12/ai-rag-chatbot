@@ -865,6 +865,14 @@
           currentConversationId = id;
           localStorage.setItem("activeConversationId", id);
 
+          // Reset Token Display when loading a different conversation
+          const tokenContainer = document.getElementById("tokenUsageContainer");
+          if (tokenContainer) tokenContainer.classList.add("hidden");
+          const tokenCount = document.getElementById("tokenCount");
+          if (tokenCount) tokenCount.textContent = "0 tokens";
+          const warning = document.getElementById("tokenWarning");
+          if (warning) warning.classList.add("hidden");
+
           const container = document.getElementById("chatContainer");
           container.innerHTML = "";
           container.classList.remove("text-center"); // Remove centering for chat messages
@@ -873,6 +881,10 @@
 
           const data = await res.json();
           chatHistory = Array.isArray(data) ? data : data.messages || [];
+
+          // Update message count in UI
+          const histText = document.getElementById("historyCount");
+          if (histText) histText.textContent = `${chatHistory.length} msgs`;
 
           if (chatHistory.length === 0) {
             appendWelcomeMessage();
@@ -910,6 +922,17 @@
         appendWelcomeMessage();
         fetchConversations();
         updateExportButton();
+
+        // Reset Token Display
+        const container = document.getElementById("tokenUsageContainer");
+        const countText = document.getElementById("tokenCount");
+        const histText = document.getElementById("historyCount");
+        const warning = document.getElementById("tokenWarning");
+
+        if (container) container.classList.add("hidden");
+        if (countText) countText.textContent = "0 tokens";
+        if (histText) histText.textContent = "0 msgs";
+        if (warning) warning.classList.add("hidden");
       }
 
       async function deleteDoc(docId, fileName) {

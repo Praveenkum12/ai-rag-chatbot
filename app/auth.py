@@ -33,9 +33,33 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+
 def decode_access_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
+
+from fastapi import Request, HTTPException, status
+async def get_current_user_id(request: Request) -> str:
+    auth_header = request.headers.get("Authorization")
+    
+    # CASE 1: No header provided (Clean Guest access)
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return "guest"
+    
+    # CASE 2: Token provided - MUST be valid
+    token = auth_header.split(" ")[1]
+    payload = decode_access_token(token)
+    
+    if payload is None:
+        # Token exists but is expired or tampered with
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or invalid. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = str(payload.get("sub", "guest"))
+    return user_id

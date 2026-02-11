@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Conversation, Message, UserMemory
 from fastapi import Depends
+from app.auth import get_current_user_id
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Model configuration for token management
 MODEL_NAME = "gpt-4.1-nano" # or whatever model you use
-MODEL_TOKEN_LIMIT = 3000 # Example limit for older/local models
+MODEL_TOKEN_LIMIT = 10000 # Example limit for older/local models
 SUMMARIZATION_THRESHOLD = int(MODEL_TOKEN_LIMIT * 0.75)
 
 from datetime import datetime, timedelta
@@ -80,7 +81,7 @@ class SearchRequest(BaseModel):
 
 
 @router.post("/documents/upload")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(request: Request, file: UploadFile = File(...), user_id: str = Depends(get_current_user_id)):
     allowed_extensions = {".pdf", ".txt", ".md"}
     file_ext = Path(file.filename).suffix.lower()
     
@@ -91,16 +92,6 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         )
 
     try:
-        # Get User from Token
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            if payload:
-                user_id = str(payload.get("sub"))
-        
         print(f"DEBUG: Uploading document for User: {user_id}")
 
         doc_id = str(uuid.uuid4())
@@ -137,22 +128,12 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
 
 @router.get("/documents")
-async def list_documents(request: Request):
+async def list_documents(user_id: str = Depends(get_current_user_id), request: Request = None):
     """
     Returns a list of unique documents by querying the vector database's metadata.
     Filtered by the currently logged-in user.
     """
     try:
-        # Get User from Token
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            if payload:
-                user_id = str(payload.get("sub"))
-        
         print(f"DEBUG: Listing documents for User ID: {user_id}")
 
         # Query metadata filtered by user_id
@@ -191,27 +172,8 @@ async def list_documents(request: Request):
 
 
 @router.post("/chat")
-async def chat(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db)):
+async def chat(request: Request, chat_request: ChatRequest, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     try:
-        # 0. Get User from Token (Optional for now, but good practice)
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"  # Default to 'guest' if not authenticated
-        
-        print(f"DEBUG: Authorization header present: {bool(auth_header)}")
-        
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            print(f"DEBUG: Token extracted: {token[:20]}...")
-            
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            
-            print(f"DEBUG: Decoded payload: {payload}")
-            
-            if payload:
-                user_id = str(payload.get("sub"))
-                print(f"DEBUG: Extracted user_id from token: {user_id}")
-        
         print(f"DEBUG: Final user_id for this request: {user_id}")
 
         # 1. Handle Conversation Persistence
@@ -424,11 +386,11 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
             history_text += f"{role}: {msg.get('content')}\n"
 
         if not history_text:
-            history_text = "No previous conversation."
+            history_text = "None"
 
         # 5.5 Fetch Long-Term Memories
         memories = db.query(UserMemory).filter(UserMemory.user_id == user_id).all() if user_id else []
-        memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "No previous memories stored."
+        memory_text = "\n".join([f"- {m.fact}" for m in memories]) if memories else "None"
 
         print(f"DEBUG: Context length: {len(context_text)}")
         
@@ -438,35 +400,26 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         import json
         
         # Build messages for OpenAI
-        messages = [
-            {
-                "role": "system",
-                "content": f"""You are a Knowledge Assistant. Use the provided context to answer questions accurately.
+        if is_greeting:
+            system_content = "You are a warm and helpful Knowledge Assistant. Greet the user and offer assistance. Be concise."
+        else:
+            system_content = f"""You are a Knowledge Assistant. Use the provided context to answer.
 
-PRIMARY DIRECTIVE:
-1. **TOOLS FIRST**: If the user asks about weather, time, or location, ALWAYS use the relevant tool immediately.
-2. **KNOWLEDGE BASE**: Use the "Context from knowledge base" section to answer. If the information is present (e.g., in a resume), synthesize an answer even if not explicitly stated as a fact.
-3. **STRICT DISCLOSURE**: Only if the answer is completely missing from the documents AND no tool can answer it, say "I don't know."
+DIRECTIVES:
+1. Use tools (`get_weather`, `get_datetime`, `get_user_location`) for weather/time/location.
+2. Search "Knowledge Base" (e.g. resumes) to synthesize answers. 
+3. If no info/tool can answer, say "I don't know."
 
-SPECIFIC RULES:
-- **Weather** → Use `get_weather`.
-- **Time/Date** → Use `get_datetime`.
-- **Location** → Use `get_user_location`.
-- **Greetings** → Respond warmly.
-- **Identity** → If the context contains a person's name (like a resume), use that information to describe who they are.
+Knowledge Base:
+{context_text if context_text else "None"}
 
-Context from knowledge base:
-{context_text if context_text else "No documents available"}
-
-Chat History:
+History:
 {history_text}
 
-User Memories:
-{memory_text}
+Memories:
+{memory_text}"""
 
-Question: {chat_request.question}"""
-            }
-        ]
+        messages = [{"role": "system", "content": system_content}]
         
         # Add current question
         messages.append({
@@ -477,13 +430,18 @@ Question: {chat_request.question}"""
         # Initialize OpenAI client
         client = OpenAI()
         
-        # First API call with tools
-        response = client.chat.completions.create(
-            model="gpt-4.1-nano",
-            messages=messages,
-            tools=AVAILABLE_TOOLS,
-            tool_choice="auto"
-        )
+        # First API call - optimized for greetings
+        llm_kwargs = {
+            "model": "gpt-4.1-nano",
+            "messages": messages,
+        }
+        
+        # Only attach tools if NOT a greeting to save significant input tokens
+        if not is_greeting:
+            llm_kwargs["tools"] = AVAILABLE_TOOLS
+            llm_kwargs["tool_choice"] = "auto"
+            
+        response = client.chat.completions.create(**llm_kwargs)
         
         # Initial tool check
         response_message = response.choices[0].message
@@ -618,18 +576,21 @@ Question: {chat_request.question}"""
 
 
 @router.post("/search")
-def search(request: Request, search_request: SearchRequest):
-    filter_dict = None
+async def search(search_request: SearchRequest, request: Request, user_id: str = Depends(get_current_user_id)):
+    meta_filters = [{"user_id": {"$eq": user_id}}]
+    
     if search_request.doc_ids:
         if len(search_request.doc_ids) == 1:
-            filter_dict = {"doc_id": search_request.doc_ids[0]}
+            meta_filters.append({"doc_id": {"$eq": search_request.doc_ids[0]}})
         else:
-            filter_dict = {"doc_id": {"$in": search_request.doc_ids}}
+            meta_filters.append({"doc_id": {"$in": search_request.doc_ids}})
+
+    filters = {"$and": meta_filters} if len(meta_filters) > 1 else meta_filters[0]
 
     results = request.app.state.vectordb.similarity_search(
         search_request.query, 
         k=search_request.k,
-        filter=filter_dict
+        filter=filters
     )
     return [
         {
@@ -640,22 +601,12 @@ def search(request: Request, search_request: SearchRequest):
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(request: Request, doc_id: str):
+async def delete_document(request: Request, doc_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Deletes a single document from both Chroma and the disk.
     Protected: Only allows deleting if it belongs to the user.
     """
     try:
-        # Get User from Token
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            if payload:
-                user_id = str(payload.get("sub"))
-        
         print(f"DEBUG: Delete request from user_id: {user_id} for doc: {doc_id}")
 
         # 1. Delete from Chroma (with user_id filter for safety)
@@ -682,21 +633,11 @@ async def delete_document(request: Request, doc_id: str):
 
 
 @router.post("/documents/clear")
-async def clear_documents(request: Request):
+async def clear_documents(request: Request, user_id: str = Depends(get_current_user_id)):
     """
     Clears ONLY the current user's documents from the vector store.
     """
     try:
-        # Get User from Token
-        auth_header = request.headers.get("Authorization")
-        user_id = "guest"
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            from app.auth import decode_access_token
-            payload = decode_access_token(token)
-            if payload:
-                user_id = str(payload.get("sub"))
-        
         print(f"DEBUG: Clear request from user_id: {user_id}")
 
         # Clear just this user's data from Chroma
@@ -713,34 +654,14 @@ async def clear_documents(request: Request):
 
 
 @router.get("/conversations")
-async def list_conversations(request: Request, db: Session = Depends(get_db)):
+async def list_conversations(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Returns a list of all chat sessions for the current user."""
-    # Get User from Token
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
-    
     print(f"DEBUG: List conversations for user_id: {user_id}")
-
     return db.query(Conversation).filter(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc()).all()
 
 @router.get("/conversations-search")
-async def search_conversations(q: str, request: Request, db: Session = Depends(get_db)):
+async def search_conversations(q: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Searches conversations by title or message content."""
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
-    
     # Search in titles
     conv_query = db.query(Conversation).filter(
         Conversation.user_id == user_id,
@@ -759,46 +680,21 @@ async def search_conversations(q: str, request: Request, db: Session = Depends(g
     return results
 
 @router.get("/memories")
-async def get_memories(request: Request, db: Session = Depends(get_db)):
+async def get_memories(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Returns all memories for the logged-in user."""
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
-            
     return db.query(UserMemory).filter(UserMemory.user_id == user_id).all()
 
 @router.delete("/memories/{memory_id}")
-async def delete_memory(memory_id: str, request: Request, db: Session = Depends(get_db)):
+async def delete_memory(memory_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Deletes a specific memory."""
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
-            
     db.query(UserMemory).filter(UserMemory.id == memory_id, UserMemory.user_id == user_id).delete()
     db.commit()
     return {"message": "Memory deleted"}
 
 @router.get("/analytics")
-async def get_analytics(request: Request, db: Session = Depends(get_db)):
+async def get_analytics(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Calculates chat and memory statistics."""
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
+    print(f"DEBUG: Analytics request for user_id: {user_id}")
 
     # Stats calculation
     total_convs = db.query(Conversation).filter(Conversation.user_id == user_id).count()
@@ -823,18 +719,8 @@ async def get_analytics(request: Request, db: Session = Depends(get_db)):
     }
 
 @router.post("/clear-chat-history")
-async def clear_all_conversations(request: Request, db: Session = Depends(get_db)):
+async def clear_all_conversations(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Deletes all chat history for the current user."""
-    # Get User from Token
-    auth_header = request.headers.get("Authorization")
-    user_id = "guest"
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        from app.auth import decode_access_token
-        payload = decode_access_token(token)
-        if payload:
-            user_id = str(payload.get("sub"))
-    
     print(f"DEBUG: ATTEMPTING TO CLEAR ALL HISTORY FOR USER: {user_id}")
     
     # Get all conversation IDs for this user
@@ -844,7 +730,7 @@ async def clear_all_conversations(request: Request, db: Session = Depends(get_db
     print(f"DEBUG: Found {len(conv_ids)} conversations to delete.")
     
     if conv_ids:
-        # Delete messages in batches or all together
+        # Delete messages
         db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(synchronize_session=False)
         # Delete conversations
         db.query(Conversation).filter(Conversation.user_id == user_id).delete(synchronize_session=False)
@@ -853,8 +739,13 @@ async def clear_all_conversations(request: Request, db: Session = Depends(get_db
     return {"message": "All chat history cleared"}
 
 @router.get("/conversations/{conv_id}")
-async def get_conversation_history(conv_id: str, db: Session = Depends(get_db)):
+async def get_conversation_history(conv_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Returns the message history for a specific conversation ID."""
+    # Verify ownership
+    conv = db.query(Conversation).filter(Conversation.id == conv_id, Conversation.user_id == user_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found or access denied")
+        
     messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc()).all()
     return [{
         "role": msg.role,
@@ -862,23 +753,28 @@ async def get_conversation_history(conv_id: str, db: Session = Depends(get_db)):
     } for msg in messages]
 
 @router.delete("/conversations/{conv_id}")
-async def delete_conversation(conv_id: str, db: Session = Depends(get_db)):
+async def delete_conversation(conv_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Deletes a conversation and all its messages."""
+    # Verify ownership before delete
+    conv = db.query(Conversation).filter(Conversation.id == conv_id, Conversation.user_id == user_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found or access denied")
+        
     db.query(Message).filter(Message.conversation_id == conv_id).delete()
     db.query(Conversation).filter(Conversation.id == conv_id).delete()
     db.commit()
     return {"message": "Conversation deleted"}
 
 @router.get("/conversations/{conv_id}/export")
-async def export_conversation(conv_id: str, db: Session = Depends(get_db)):
+async def export_conversation(conv_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """Exports the conversation history as a text file."""
     try:
-        print(f"DEBUG: Export requested for conversation: {conv_id}")
-        # Fetch the conversation title
-        conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+        print(f"DEBUG: Export requested for conversation: {conv_id} from user: {user_id}")
+        # Fetch the conversation title and verify ownership
+        conv = db.query(Conversation).filter(Conversation.id == conv_id, Conversation.user_id == user_id).first()
         if not conv:
-            print(f"DEBUG: Conversation {conv_id} not found in DB")
-            raise HTTPException(status_code=404, detail="Conversation not found")
+            print(f"DEBUG: Conversation {conv_id} not found or denied for user: {user_id}")
+            raise HTTPException(status_code=404, detail="Conversation not found or access denied")
             
         messages = db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.created_at.asc()).all()
         print(f"DEBUG: Found {len(messages)} messages for export")
