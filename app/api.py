@@ -504,23 +504,31 @@ Question: {chat_request.question}"""
             # Add the assistant's response (containing tool_calls) to messages
             messages.append(response_message)
             
-            # Execute each tool call in the current turn
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
+            # Execute tool calls in parallel for this turn
+            import asyncio
+            
+            async def run_tool(tc):
+                f_name = tc.function.name
+                f_args = json.loads(tc.function.arguments)
+                print(f"DEBUG: Calling {f_name} (Parallel) with args: {f_args}")
                 
-                print(f"DEBUG: Calling {function_name} with args: {function_args}")
-                tools_used.append({"name": function_name, "args": function_args})
-                
-                # Execute the function
-                function_response = await execute_function(function_name, function_args)
+                resp = await execute_function(f_name, f_args)
+                return tc.id, f_name, f_args, resp
+
+            # Start all tasks concurrently
+            tasks = [run_tool(tc) for tc in tool_calls]
+            results = await asyncio.gather(*tasks)
+
+            # Process results
+            for tc_id, f_name, f_args, f_resp in results:
+                tools_used.append({"name": f_name, "args": f_args})
                 
                 # Include tool usage in sources for citation
                 source_data.append({
-                    "content": function_response,
+                    "content": f_resp,
                     "metadata": {
-                        "filename": f"Tool: {function_name}",
-                        "doc_id": f"tool_{function_name}",
+                        "filename": f"Tool: {f_name}",
+                        "doc_id": f"tool_{f_name}",
                         "confidence": 100,
                         "type": "tool"
                     }
@@ -528,10 +536,10 @@ Question: {chat_request.question}"""
                 
                 # Add function response to messages
                 messages.append({
-                    "tool_call_id": tool_call.id,
+                    "tool_call_id": tc_id,
                     "role": "tool",
-                    "name": function_name,
-                    "content": function_response
+                    "name": f_name,
+                    "content": f_resp
                 })
             
             # Call AI again with tool results to see if more tools are needed
