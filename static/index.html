@@ -885,7 +885,7 @@
                     <div class="text-sm font-medium text-white truncate w-32">${doc.name}</div>
                     <div class="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider tabular-nums font-mono opacity-60">#${doc.id.substring(0, 8)}...</div>
                 </div>
-                <button 
+                <button
                   onclick="event.stopPropagation(); deleteDoc('${doc.id}', '${doc.name}')"
                   class="p-2 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all"
                   title="Delete Document"
@@ -1262,20 +1262,18 @@
         if (!msgDiv) return;
         const container = msgDiv.querySelector(".glass");
 
-        // Create timing icon
         const timingDiv = document.createElement("div");
-        // Moved to right side as per user request "this side"
         timingDiv.className = "absolute -bottom-2 -right-2 tooltip z-20";
 
         const breakdown = `
           <div class="space-y-1">
-            <div class="flex justify-between gap-4"><span>Setup:</span> <span class="text-indigo-400 font-mono">${timings.setup || 0}ms</span></div>
-            <div class="flex justify-between gap-4"><span>Save DB:</span> <span class="text-indigo-400 font-mono">${(timings.save_user || 0) + (timings.save_ai || 0)}ms</span></div>
-            <div class="flex justify-between gap-4"><span>Retrieval:</span> <span class="text-indigo-400 font-mono">${timings.retrieval}ms</span></div>
-            <div class="flex justify-between gap-4"><span>Prompt:</span> <span class="text-indigo-400 font-mono">${timings.prompt}ms</span></div>
-            <div class="flex justify-between gap-4"><span>TTFT:</span> <span class="text-indigo-400 font-mono">${timings.ttft}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Setup:</span> <span class="text-indigo-400 font-mono">${(timings.setup || 0).toFixed(2)}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Save DB:</span> <span class="text-indigo-400 font-mono">${((timings.save_user || 0) + (timings.save_ai || 0)).toFixed(2)}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Retrieval:</span> <span class="text-indigo-400 font-mono">${(timings.retrieval || 0).toFixed(2)}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Prompt:</span> <span class="text-indigo-400 font-mono">${(timings.prompt || 0).toFixed(2)}ms</span></div>
+            <div class="flex justify-between gap-4"><span>TTFT:</span> <span class="text-indigo-400 font-mono">${(timings.ttft || 0).toFixed(2)}ms</span></div>
             <div class="flex justify-between gap-4"><span>Tokens:</span> <span class="text-indigo-400 font-mono">${timings.usage || 0}</span></div>
-            <div class="flex justify-between gap-4 font-bold border-t border-white/10 pt-1 mt-1"><span>Total:</span> <span class="text-white font-mono">${timings.total}ms</span></div>
+            <div class="flex justify-between gap-4 font-bold border-t border-white/10 pt-1 mt-1"><span>Total:</span> <span class="text-white font-mono">${(timings.total || 0).toFixed(2)}ms</span></div>
           </div>
         `;
 

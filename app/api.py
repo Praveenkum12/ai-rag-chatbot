@@ -688,16 +688,17 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             # Send conversation ID immediately
             yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conv_id})}\n\n"
             
-            # 2. Save user message
+            # 2. Save user message (Pre-calculate tokens for the whole turn)
+            prompt_tokens_count = count_tokens(chat_request.question)
             msg_start = time.time()
             user_msg = Message(
                 conversation_id=conv_id,
                 role="user",
                 content=chat_request.question,
-                token_count=count_tokens(chat_request.question)
+                token_count=prompt_tokens_count
             )
             db.add(user_msg)
-            db.commit() # Persistent commit for order
+            db.commit() 
             timings["save_user"] = round((time.time() - msg_start) * 1000, 2)
             
             # 3. Build filters
@@ -975,13 +976,17 @@ Memories:
 
             timings["llm_full"] = round((time.time() - llm_start) * 1000, 2)
             
-            # 8. Save AI response
+            # 8. Save AI response (Include the heavy prompt/context tokens in the AI message count for true cost tracking)
+            # This ensures the Sidebar total reflects the ACTUAL tokens 'spent' at the API
+            gross_prompt_tokens = count_tokens(system_content)
+            completion_tokens = count_tokens(full_response)
+            
             save_ai_start = time.time()
             ai_msg = Message(
                 conversation_id=conv_id,
                 role="assistant",
                 content=full_response,
-                token_count=count_tokens(full_response)
+                token_count=gross_prompt_tokens + completion_tokens
             )
             db.add(ai_msg)
             db.commit()
@@ -995,8 +1000,8 @@ Memories:
             
             # 10. Send timings
             timings["total"] = round((time.time() - request_start) * 1000, 2)
-            # Add token usage for this specific turn to timings for UI display
-            timings["usage"] = count_tokens(chat_request.question) + count_tokens(full_response)
+            # Add GROSS token usage (User Query + Prompt Overhead + Response) for this turn
+            timings["usage"] = prompt_tokens_count + gross_prompt_tokens + completion_tokens
             yield f"data: {json.dumps({'type': 'timing', 'timings': timings})}\n\n"
 
             # Print console log as well since user liked it
