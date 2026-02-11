@@ -30,8 +30,40 @@ SUMMARIZATION_THRESHOLD = int(MODEL_TOKEN_LIMIT * 0.75)
 # OPTIMIZED: Initialize clients once at global scope to avoid per-request overhead
 from openai import OpenAI
 from app.rag.qa import get_llm
+import httpx
 client = OpenAI()
 llm_client = get_llm()
+
+async def fetch_user_location():
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://ip-api.com/json/", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                return f"Location: {data.get('city')}, {data.get('regionName')}, {data.get('country')} (IP: {data.get('query')})"
+    except Exception as e:
+        print(f"DEBUG: Geo-IP failed: {e}")
+    return "Location: Unknown (Could not determine location via IP)"
+
+async def fetch_weather(city: str):
+    api_key = os.getenv("WEATHER_API_KEY")
+    if not api_key:
+        return "Weather Tool Error: No API Key configured."
+    try:
+        async with httpx.AsyncClient() as client:
+            # Use OpenWeatherMap API
+            url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+            resp = await client.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                temp = data['main']['temp']
+                desc = data['weather'][0]['description']
+                return f"The weather in {city} is {temp}°C with {desc}."
+            elif resp.status_code == 404:
+                return f"Weather Error: City '{city}' not found."
+    except Exception as e:
+        print(f"DEBUG: Weather fetch failed: {e}")
+    return "Weather Error: Could not retrieve real-time data."
 
 from datetime import datetime, timedelta
 
@@ -616,7 +648,12 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
     """
     async def generate():
         request_start = time.time()
-        timings = {}
+        # Initialize all keys to avoid KeyErrors if a step is skipped
+        timings = {
+            "setup": 0, "save_user": 0, "retrieval": 0, 
+            "filters": 0, "context": 0, "memory": 0,
+            "prompt": 0, "ttft": 0, "llm_full": 0, "save_ai": 0
+        }
         try:
             import json
             
@@ -658,7 +695,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                 token_count=count_tokens(chat_request.question)
             )
             db.add(user_msg)
-            db.commit()
+            db.commit() # Persistent commit for order
             timings["save_user"] = round((time.time() - msg_start) * 1000, 2)
             
             # 3. Build filters
@@ -795,6 +832,14 @@ Memories:
                         "description": "Get current date and time",
                         "parameters": {"type": "object", "properties": {}}
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_user_location",
+                        "description": "Get the user's current city and region",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
                 }
             ]
 
@@ -820,12 +865,16 @@ Memories:
             full_response = ""
             first_token_sent = False
             tool_calls = []
+            tool_sources = []
             
             for chunk in stream:
                 delta = chunk.choices[0].delta
                 
                 # Handle Tool Calls (Non-streaming tokens)
                 if delta.tool_calls:
+                    if not first_token_sent:
+                        timings["ttft"] = round((time.time() - llm_start) * 1000, 2)
+                        first_token_sent = True
                     for tc in delta.tool_calls:
                         if len(tool_calls) <= tc.index:
                             tool_calls.append({"id": tc.id, "name": tc.function.name, "args": ""})
@@ -853,18 +902,28 @@ Memories:
                     tool_result = ""
                     if func_name == "get_weather":
                         city = args.get("city", "India")
-                        tool_result = f"The weather in {city} is currently 28°C and sunny (Real-time data)."
+                        tool_result = await fetch_weather(city)
                     elif func_name == "get_datetime":
                         from datetime import datetime
                         tool_result = f"Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    elif func_name == "get_user_location":
+                        tool_result = await fetch_user_location()
                     
-                    # Send a "tool execution" signal to UI
-                    yield f"data: {json.dumps({'type': 'token', 'content': f'*(Executing Tool: {func_name}...)*\n\n'})}\n\n"
+                    # Add tool execution to tool_sources
+                    tool_sources.append({
+                        "content": tool_result,
+                        "metadata": {
+                            "type": "tool", 
+                            "filename": f"tool:{func_name}",
+                            "confidence": 100
+                        }
+                    })
                     
-                    # We send the result back to another model turn or just append it
-                    # For simplicity, we'll append the result to the response
-                    full_response += f"\n\n{tool_result}"
-                    yield f"data: {json.dumps({'type': 'token', 'content': f'{tool_result}'})}\n\n"
+                    # STREAM THE RESULT INTO THE BUBBLE
+                    # We present it nicely without excessive padding
+                    display_text = f"{tool_result}"
+                    full_response += display_text
+                    yield f"data: {json.dumps({'type': 'token', 'content': display_text})}\n\n"
 
             timings["llm_full"] = round((time.time() - llm_start) * 1000, 2)
             
@@ -880,13 +939,16 @@ Memories:
             db.commit()
             timings["save_ai"] = round((time.time() - save_ai_start) * 1000, 2)
             
-            # 9. Send sources
+            # 9. Send sources (Merge Hybrid Docs + Tool Results)
+            combined_sources = tool_sources + source_data
             hide_sources = is_greeting or (full_response and "i don't know" in full_response.lower())
-            if not hide_sources and source_data:
-                yield f"data: {json.dumps({'type': 'sources', 'sources': source_data})}\n\n"
+            if not hide_sources and combined_sources:
+                yield f"data: {json.dumps({'type': 'sources', 'sources': combined_sources})}\n\n"
             
             # 10. Send timings
             timings["total"] = round((time.time() - request_start) * 1000, 2)
+            # Add token usage for this specific turn to timings for UI display
+            timings["usage"] = count_tokens(chat_request.question) + count_tokens(full_response)
             yield f"data: {json.dumps({'type': 'timing', 'timings': timings})}\n\n"
 
             # Print console log as well since user liked it

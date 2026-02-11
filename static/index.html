@@ -1269,9 +1269,12 @@
 
         const breakdown = `
           <div class="space-y-1">
+            <div class="flex justify-between gap-4"><span>Setup:</span> <span class="text-indigo-400 font-mono">${timings.setup || 0}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Save DB:</span> <span class="text-indigo-400 font-mono">${(timings.save_user || 0) + (timings.save_ai || 0)}ms</span></div>
             <div class="flex justify-between gap-4"><span>Retrieval:</span> <span class="text-indigo-400 font-mono">${timings.retrieval}ms</span></div>
             <div class="flex justify-between gap-4"><span>Prompt:</span> <span class="text-indigo-400 font-mono">${timings.prompt}ms</span></div>
             <div class="flex justify-between gap-4"><span>TTFT:</span> <span class="text-indigo-400 font-mono">${timings.ttft}ms</span></div>
+            <div class="flex justify-between gap-4"><span>Tokens:</span> <span class="text-indigo-400 font-mono">${timings.usage || 0}</span></div>
             <div class="flex justify-between gap-4 font-bold border-t border-white/10 pt-1 mt-1"><span>Total:</span> <span class="text-white font-mono">${timings.total}ms</span></div>
           </div>
         `;
