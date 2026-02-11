@@ -5,6 +5,7 @@ from pathlib import Path
 import uuid
 import tiktoken
 import time
+import os
 
 from app.rag.ingest import load_and_split_document
 from app.rag.vectorstore import clear_vectorstore
@@ -655,6 +656,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             "prompt": 0, "ttft": 0, "llm_full": 0, "save_ai": 0
         }
         try:
+            print(f"DEBUG: [STREAM] Request from user_id: {user_id}")
             import json
             
             # 1. Handle Conversation Persistence
@@ -724,7 +726,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             if len(meta_filters) == 1:
                 filters = meta_filters[0]
             elif len(meta_filters) > 1:
+                # Use standard Chroma filter format
                 filters = {"$and": meta_filters}
+            
+            print(f"DEBUG: [STREAM] Filters applied: {filters}")
             timings["filters"] = round((time.time() - filter_start) * 1000, 2)
             
             # 4. Retrieval (HYBRID: Vector + BM25)
@@ -733,7 +738,13 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
             is_greeting = clean_q in ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "yo", "hi there"]
             
             retrieved_docs = []
-            if not is_greeting:
+            # STRICT SCOPING: Only retrieve if the user has explicitly selected a document,
+            # a file type, or a date range. This prevents "mystery context" from unselected files.
+            has_selection = bool(chat_request.doc_ids or 
+                                (chat_request.file_type and chat_request.file_type != "all") or 
+                                (chat_request.date_filter and chat_request.date_filter != "any"))
+            
+            if not is_greeting and has_selection:
                 try:
                     # USE THE SECURE HYBRID RETRIEVER
                     hybrid_retriever = get_hybrid_retriever(
@@ -741,10 +752,19 @@ async def chat_stream(request: Request, chat_request: ChatRequest, db: Session =
                         search_kwargs={"k": 5, "filter": filters}, 
                         user_id=user_id
                     )
+                    print(f"DEBUG: Active Filters: {filters}")
                     retrieved_docs = hybrid_retriever.invoke(chat_request.question)
-                    print(f"DEBUG: Hybrid Retrieval returned {len(retrieved_docs)} docs")
+                    
+                    # Truncate merged results from Ensemble to keep it focused
+                    retrieved_docs = retrieved_docs[:5]
+                    
+                    print(f"DEBUG: Hybrid Retrieval (Scoped) returned {len(retrieved_docs)} docs")
+                    if not retrieved_docs:
+                        print(f"DEBUG: WARNING - Retrieval returned 0 docs for filters: {filters}")
                 except Exception as e:
                     print(f"DEBUG: Hybrid Retrieval failed: {e}")
+            elif not is_greeting and not has_selection:
+                print(f"DEBUG: Skipping retrieval (No documents selected by user)")
             timings["retrieval"] = round((time.time() - retrieval_start) * 1000, 2)
             
             # 5. Build context
@@ -829,8 +849,14 @@ Memories:
                     "type": "function",
                     "function": {
                         "name": "get_datetime",
-                        "description": "Get current date and time",
-                        "parameters": {"type": "object", "properties": {}}
+                        "description": "Get current date and time. Optionally for a specific city.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string", "description": "Specific city to get time for (e.g. New York)"}
+                            },
+                            "required": []
+                        }
                     }
                 },
                 {
@@ -904,8 +930,30 @@ Memories:
                         city = args.get("city", "India")
                         tool_result = await fetch_weather(city)
                     elif func_name == "get_datetime":
-                        from datetime import datetime
-                        tool_result = f"Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        city = args.get("city")
+                        if city:
+                            # Use WorldTimeAPI or similar to get city time
+                            # For reliability in interview, let's use a robust calculation or API
+                            try:
+                                async with httpx.AsyncClient() as h_client:
+                                    # We can get timezone from OpenWeather integration too
+                                    api_key = os.getenv("WEATHER_API_KEY")
+                                    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}"
+                                    resp = await h_client.get(url, timeout=5)
+                                    if resp.status_code == 200:
+                                        data = resp.json()
+                                        timezone_offset = data.get("timezone", 0) # Seconds from UTC
+                                        from datetime import datetime, timedelta, timezone
+                                        utc_time = datetime.now(timezone.utc)
+                                        local_time = utc_time + timedelta(seconds=timezone_offset)
+                                        tool_result = f"Current Time in {city.title()}: {local_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                    else:
+                                        tool_result = f"Time Error: Could not find timezone for '{city}'."
+                            except Exception as e:
+                                tool_result = f"Time Error: {str(e)}"
+                        else:
+                            from datetime import datetime
+                            tool_result = f"Current Local Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     elif func_name == "get_user_location":
                         tool_result = await fetch_user_location()
                     
@@ -960,8 +1008,11 @@ Memories:
             print(f"   └─ TTFT (First Token): {timings['ttft']}ms")
             print(f"   └─ Total: {timings['total']}ms\n")
 
-            # 11. Send completion signal
-            yield f"data: {json.dumps({'type': 'done', 'token_usage': count_tokens(chat_request.question) + count_tokens(full_response)})}\n\n"
+            # 11. Send done signal with TOTAL tokens for the conversation
+            from sqlalchemy import func
+            total_tokens = db.query(func.sum(Message.token_count)).filter(Message.conversation_id == conv_id).scalar() or 0
+            print(f"DEBUG: Conversation {conv_id} total tokens: {total_tokens}")
+            yield f"data: {json.dumps({'type': 'done', 'token_usage': int(total_tokens)})}\n\n"
             
         except Exception as e:
             print(f"STREAMING ERROR: {str(e)}")
