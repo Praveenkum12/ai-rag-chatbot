@@ -433,10 +433,10 @@
         </div>
         <div
           id="chatContainer"
-          class="chat-container flex-1 overflow-y-auto p-8 space-y-6"
+          class="chat-container flex-1 overflow-y-auto p-8 space-y-6 text-center"
         >
-          <!-- Welcome Message -->
-          <div class="max-w-3xl mx-auto text-center mt-12 mb-8">
+          <!-- Welcome View -->
+          <div id="welcomeIntro" class="max-w-3xl mx-auto mt-12 mb-8">
             <h2 class="text-3xl font-bold mb-4 font-outfit">
               Hello! How can I help today?
             </h2>
@@ -598,7 +598,13 @@
 
         // Check for persisted conversation
         const savedConvId = localStorage.getItem("activeConversationId");
-        if (savedConvId && savedConvId !== "null") {
+        if (
+          savedConvId &&
+          savedConvId !== "null" &&
+          savedConvId !== "undefined"
+        ) {
+          console.log("Restoring session:", savedConvId);
+          currentConversationId = savedConvId; // Set immediately to prevent race conditions
           await loadConversation(savedConvId);
         } else {
           startNewChat();
@@ -842,7 +848,7 @@
       }
 
       async function loadConversation(id) {
-        if (!id || id === "null") return;
+        if (!id || id === "null" || id === "undefined") return;
 
         try {
           const res = await apiFetch(`/conversations/${id}`);
@@ -858,33 +864,50 @@
 
           currentConversationId = id;
           localStorage.setItem("activeConversationId", id);
-          document.getElementById("chatContainer").innerHTML = "";
+
+          const container = document.getElementById("chatContainer");
+          container.innerHTML = "";
+          container.classList.remove("text-center"); // Remove centering for chat messages
+
           closeHistoryDrawer();
 
-          chatHistory = await res.json();
-          chatHistory.forEach((msg) => {
-            appendMessage(msg.role === "user" ? "user" : "bot", msg.content);
-          });
+          const data = await res.json();
+          chatHistory = Array.isArray(data) ? data : data.messages || [];
+
+          if (chatHistory.length === 0) {
+            appendWelcomeMessage();
+          } else {
+            chatHistory.forEach((msg) => {
+              appendMessage(msg.role === "user" ? "user" : "bot", msg.content);
+            });
+          }
 
           fetchConversations(); // Update active highlight
           updateExportButton();
         } catch (e) {
-          console.error(e);
+          console.error("Error loading conversation:", e);
           localStorage.removeItem("activeConversationId");
           startNewChat();
         }
+      }
+
+      function appendWelcomeMessage() {
+        const container = document.getElementById("chatContainer");
+        container.classList.add("text-center");
+        container.innerHTML = `
+          <div id="welcomeIntro" class="max-w-3xl mx-auto mt-12 mb-8">
+            <h2 class="text-3xl font-bold mb-4 font-outfit">Hello! How can I help today?</h2>
+            <p class="text-slate-400">Ask me anything about your uploaded documents. I'll provide answers with source citations.</p>
+          </div>
+        `;
+        lucide.createIcons();
       }
 
       function startNewChat() {
         currentConversationId = null;
         localStorage.removeItem("activeConversationId");
         chatHistory = [];
-        document.getElementById("chatContainer").innerHTML = `
-          <div class="max-w-3xl mx-auto text-center mt-12 mb-8">
-            <h2 class="text-3xl font-bold mb-4 font-outfit">New Conversation</h2>
-            <p class="text-slate-400">Past chats are saved in your history.</p>
-          </div>
-        `;
+        appendWelcomeMessage();
         fetchConversations();
         updateExportButton();
       }
@@ -1126,6 +1149,11 @@
 
       function appendMessage(role, text, id = null) {
         const container = document.getElementById("chatContainer");
+        const welcome = document.getElementById("welcomeIntro");
+        if (welcome) {
+          welcome.remove();
+          container.classList.remove("text-center");
+        }
 
         // Remove existing loading message if switching/reloading
         if (id && document.getElementById(id)) {

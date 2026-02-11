@@ -345,12 +345,49 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         # Passing all retrieved documents to the LLM regardless of relevance score as requested.
         # ---------------------------
         
-        # Early return if no documents and not a greeting/special command/tool-friendly query
-        # We allow the LLM to proceed if the question mentions weather, time, or location
-        tool_keywords = ["weather", "time", "date", "today", "now", "where am i", "location", "place"]
+        # 3. Clean and Label Docs
+        context_parts = []
+        source_data = []
+        
+        # Get scores for the top docs in this specific search (for confidence metrics)
+        scored_results = {}
+        if not is_greeting and len(docs) > 0:
+            try:
+                scored_results = {
+                    doc.page_content: score 
+                    for doc, score in request.app.state.vectordb.similarity_search_with_score(
+                        chat_request.question, k=10, filter=filters if filters else None
+                    )
+                }
+            except Exception as e:
+                print(f"DEBUG: Scoring failed: {e}")
+
+        for i, doc in enumerate(docs):
+            filename = doc.metadata.get("filename", "Unknown File")
+            # Sanitize content for LLM
+            clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
+            context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
+            
+            # Calculate Percentage: 0.0 distance is 100%, 1.2+ is ~0%
+            raw_score = scored_results.get(doc.page_content, 1.0)
+            confidence = max(0, min(100, round((1 - (raw_score / 1.5)) * 100)))
+            
+            source_data.append({
+                "content": doc.page_content,
+                "metadata": {**doc.metadata, "confidence": confidence}
+            })
+        
+        context_text = "\n\n".join(context_parts)
+
+        # 4. Early return if no documents and not a greeting/tool-friendly query
+        # We allow the LLM to proceed if the question mentions tools or is a greeting
+        tool_keywords = [
+            "weather", "time", "date", "today", "now", "where am i", "location", "place",
+            "email", "mail", "send", "message", "subject", "content", "task", "todo", "reminder"
+        ]
         is_tool_query = any(word in clean_q for word in tool_keywords)
         
-        if not is_greeting and not is_tool_query and len(docs) == 0 and not context_text:
+        if not is_greeting and not is_tool_query and not context_text:
             print("DEBUG: No documents retrieved, not a greeting, and not a tool query. Returning 'I don't know.'")
             
             # Save AI Response to DB
@@ -371,40 +408,8 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
                 "tools_used": []
             }
         
-        # 4. Run LLM
+        # 5. Run LLM
         llm = get_llm()
-        prompt = get_prompt()
-        answer_chain = prompt | llm | StrOutputParser()
-        
-        # Clean and Label Docs
-        # We also perform a quick scoring pass to get confidence percentages
-        # Match each doc to its distance score from the vector store
-        context_parts = []
-        source_data = []
-
-        # Get scores for the top docs in this specific search
-        # Note: We use search_with_score to get the raw numbers
-        scored_results = {
-            doc.page_content: score 
-            for doc, score in request.app.state.vectordb.similarity_search_with_score(
-                chat_request.question, k=10, filter=filters if filters else None
-            )
-        }
-        for i, doc in enumerate(docs):
-            filename = doc.metadata.get("filename", "Unknown File")
-            clean_content = doc.page_content.replace("\x00", "").replace("♂", "").replace("¶", "").replace("•", "-")
-            context_parts.append(f"[Source {i+1}]: From {filename}\n{clean_content}")
-            
-            # Calculate Percentage: 0.0 distance is 100%, 1.2+ is ~0%
-            raw_score = scored_results.get(doc.page_content, 1.0)
-            confidence = max(0, min(100, round((1 - (raw_score / 1.5)) * 100)))
-            
-            source_data.append({
-                "content": doc.page_content,
-                "metadata": {**doc.metadata, "confidence": confidence}
-            })
-        
-        context_text = "\n\n".join(context_parts)
         
         # 5. Format History for the Prompt
         history_text = ""
@@ -436,19 +441,19 @@ async def chat(request: Request, chat_request: ChatRequest, db: Session = Depend
         messages = [
             {
                 "role": "system",
-                "content": f"""You are a RAG (Retrieval-Augmented Generation) assistant.
+                "content": f"""You are a Knowledge Assistant. Use the provided context to answer questions accurately.
 
 PRIMARY DIRECTIVE:
-1. **TOOLS FIRST**: If the user asks about weather, current time, or their location, ALWAYS use the relevant tool immediately. This takes precedence over document searching.
-2. **STRICT KNOWLEDGE BASE**: For any other factual questions, ONLY use information from the "Context from knowledge base" section. If the answer isn't there, say "I don't know."
-3. **DO NOT** use your general training knowledge for factual questions about people, places, or things unless a tool provides the data.
+1. **TOOLS FIRST**: If the user asks about weather, time, or location, ALWAYS use the relevant tool immediately.
+2. **KNOWLEDGE BASE**: Use the "Context from knowledge base" section to answer. If the information is present (e.g., in a resume), synthesize an answer even if not explicitly stated as a fact.
+3. **STRICT DISCLOSURE**: Only if the answer is completely missing from the documents AND no tool can answer it, say "I don't know."
 
 SPECIFIC RULES:
-- **Weather** → Use `get_weather`. It can handle cities (Tokyo) or countries (India).
+- **Weather** → Use `get_weather`.
 - **Time/Date** → Use `get_datetime`.
 - **Location** → Use `get_user_location`.
-- **Greetings** → Respond briefly and friendly.
-- **"Remember this"** → Confirm you'll remember it in the database.
+- **Greetings** → Respond warmly.
+- **Identity** → If the context contains a person's name (like a resume), use that information to describe who they are.
 
 Context from knowledge base:
 {context_text if context_text else "No documents available"}
@@ -459,7 +464,7 @@ Chat History:
 User Memories:
 {memory_text}
 
-REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is not in the documents above, you MUST say "I don't know." """
+Question: {chat_request.question}"""
             }
         ]
         
@@ -480,20 +485,26 @@ REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is
             tool_choice="auto"
         )
         
+        # Initial tool check
         response_message = response.choices[0].message
         tool_calls = response_message.tool_calls
         
-        # Track tool usage
+        # Track tool usage and iterations
         tools_used = []
-        
-        # Check if the model wants to call a function
-        if tool_calls:
-            print(f"DEBUG: Model requested {len(tool_calls)} tool call(s)")
+        max_iterations = 5
+        current_iteration = 0
+        total_tokens = response.usage.total_tokens
+        answer = response_message.content or ""
+
+        # Function Chaining Loop
+        while tool_calls and current_iteration < max_iterations:
+            current_iteration += 1
+            print(f"DEBUG: Processing tool call iteration {current_iteration}")
             
-            # Add the assistant's response to messages
+            # Add the assistant's response (containing tool_calls) to messages
             messages.append(response_message)
             
-            # Execute each tool call
+            # Execute each tool call in the current turn
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
@@ -504,7 +515,7 @@ REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is
                 # Execute the function
                 function_response = await execute_function(function_name, function_args)
                 
-                # ADDED: Include tool usage in sources for citation visibility
+                # Include tool usage in sources for citation
                 source_data.append({
                     "content": function_response,
                     "metadata": {
@@ -523,18 +534,28 @@ REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is
                     "content": function_response
                 })
             
-            # Second API call to get the final response
-            second_response = client.chat.completions.create(
+            # Call AI again with tool results to see if more tools are needed
+            next_response = client.chat.completions.create(
                 model="gpt-4.1-nano",
-                messages=messages
+                messages=messages,
+                tools=AVAILABLE_TOOLS,
+                tool_choice="auto"
             )
             
-            answer = second_response.choices[0].message.content
-            total_tokens = response.usage.total_tokens + second_response.usage.total_tokens
+            response_message = next_response.choices[0].message
+            tool_calls = response_message.tool_calls
+            total_tokens += next_response.usage.total_tokens
+            answer = response_message.content or ""
+            
+            # If no more tool calls, we are done
+            if not tool_calls:
+                break
         else:
-            # No tool calls needed, use the direct response
-            answer = response_message.content
-            total_tokens = response.usage.total_tokens
+            # If loop ends or wasn't entered
+            if not answer and response_message.content:
+                answer = response_message.content
+            if current_iteration >= max_iterations:
+                print("DEBUG: Max tool iterations reached. Protecting from infinite loop.")
         
         # 7. Calculate Tokens for tracking
         print(f"DEBUG: Token usage for this request: {total_tokens} (Threshold: {SUMMARIZATION_THRESHOLD})")
@@ -551,7 +572,7 @@ REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is
             print(f"DEBUG: Generated Summary for older context: {new_summary}")
 
         # Hide sources if it's a greeting OR if the AI says "I don't know"
-        hide_sources = is_greeting or "i don't know" in answer.lower()
+        hide_sources = is_greeting or (answer and "i don't know" in answer.lower())
 
         # Save AI Response to DB
         ai_msg = Message(
@@ -573,9 +594,17 @@ REMEMBER: If a tool can answer the question, use it! Otherwise, if the answer is
         }
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {str(e)}")
+        # Try to get conv_id if possible, otherwise None is okay
+        try:
+            current_conv_id = conv_id if 'conv_id' in locals() else chat_request.conversation_id
+        except:
+            current_conv_id = None
+            
         return {
             "answer": "I don't know.",
-            "sources": []
+            "conversation_id": current_conv_id,
+            "sources": [],
+            "token_usage": 0
         }
 
 
